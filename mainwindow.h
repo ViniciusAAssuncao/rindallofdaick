@@ -1,13 +1,13 @@
+// MODIFICAR mainwindow.h:
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
 #include <QMainWindow>
-
-QT_BEGIN_NAMESPACE
-namespace Ui {
-class MainWindow;
-}
-QT_END_NAMESPACE
+#include <QHBoxLayout>
+#include <QWidget>
+#include "board.h"
+#include "gamecontroller.h"
+#include "infopanel.h"
 
 class MainWindow : public QMainWindow
 {
@@ -18,6 +18,9 @@ public:
     ~MainWindow();
 
 private:
-    Ui::MainWindow *ui;
+    Board *board;
+    GameController *gameController;
+    InfoPanel *infoPanel;
 };
-#endif // MAINWINDOW_H
+
+#endif

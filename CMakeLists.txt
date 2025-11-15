@@ -26,6 +26,26 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     qt_add_executable(rindallofdaick
         MANUAL_FINALIZATION
         ${PROJECT_SOURCES}
+        board.h
+        board.cpp
+        piece.h
+        piece.cpp
+
+        piecewidget.h
+        piecewidget.cpp
+        gamecontroller.h
+        gamecontroller.cpp
+        resources.qrc
+        pieces.h
+        pieces.cpp
+        cell.h
+        infopanel.h
+        infopanel.cpp
+
+
+
+
+
     )
 # Define target properties for Android with Qt 6 as:
 #    set_property(TARGET rindallofdaick APPEND PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR

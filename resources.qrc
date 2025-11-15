@@ -1,0 +1,13 @@
+<RCC>
+    <qresource prefix="/images">
+        <file>worker.png</file>
+        <file>daick.png</file>
+        <file>rindall.png</file>
+        <file>footman.png</file>
+        <file>sentinel.png</file>
+        <file>vanguard.png</file>
+        <file>bastion.png</file>
+        <file>downloadicon.png</file>
+        <file>copyicon.png</file>
+    </qresource>
+</RCC>
