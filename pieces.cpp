@@ -11,7 +11,7 @@ QList<QPair<int, int>> Daick::getPossibleMoves(int currentRow, int currentCol, c
 
     int directions[8][2] = {
         {-1, -1}, {-1, 0}, {-1, 1},
-        {0, -1},          {0, 1},
+        {0, -1},           {0, 1},
         {1, -1},  {1, 0}, {1, 1}
     };
 
@@ -32,33 +32,28 @@ QList<QPair<int, int>> Daick::getPossibleMoves(int currentRow, int currentCol, c
 
 QList<QPair<int, int>> Rindall::getPossibleMoves(int currentRow, int currentCol, const Board* board) const {
     QList<QPair<int, int>> moves;
-
     int directions[8][2] = {
         {-1, -1}, {-1, 0}, {-1, 1},
-        {0, -1},          {0, 1},
-        {1, -1},  {1, 0}, {1, 1}
+        {0, -1}, {0, 1},
+        {1, -1}, {1, 0}, {1, 1}
     };
-
     for (int i = 0; i < 8; ++i) {
         int dr = directions[i][0];
         int dc = directions[i][1];
         int newRow = currentRow + dr;
         int newCol = currentCol + dc;
-
         while (isValidPos(newRow, newCol)) {
             PieceWidget* targetPiece = board->getPieceAt(newRow, newCol);
-
             if (!targetPiece) {
                 moves.append({newRow, newCol});
             } else if (targetPiece->getPiece()->getPlayer() != getPlayer()) {
                 moves.append({newRow, newCol});
+                break;
             }
-
             newRow += dr;
             newCol += dc;
         }
     }
-
     return moves;
 }
 
@@ -161,7 +156,7 @@ QList<QPair<int, int>> Worker::getPossibleMoves(int currentRow, int currentCol, 
 
     int directions[8][2] = {
         {-1, -1}, {-1, 0}, {-1, 1},
-        {0, -1},          {0, 1},
+        {0, -1},           {0, 1},
         {1, -1},  {1, 0}, {1, 1}
     };
 
@@ -207,7 +202,63 @@ QList<QPair<int, int>> Footman::getPossibleMoves(int currentRow, int currentCol,
 
     int directions[8][2] = {
         {-1, -1}, {-1, 0}, {-1, 1},
-        {0, -1},          {0, 1},
+        {0, -1},           {0, 1},
+        {1, -1},  {1, 0}, {1, 1}
+    };
+
+    for (int i = 0; i < 8; ++i) {
+        int newRow = currentRow + directions[i][0];
+        int newCol = currentCol + directions[i][1];
+
+        if (isValidPos(newRow, newCol)) {
+            PieceWidget* targetPiece = board->getPieceAt(newRow, newCol);
+            if (!targetPiece || targetPiece->getPiece()->getPlayer() != getPlayer()) {
+                moves.append({newRow, newCol});
+            }
+        }
+    }
+
+    return moves;
+}
+
+QList<QPair<int, int>> Champion::getPossibleMoves(int currentRow, int currentCol, const Board* board) const {
+    QList<QPair<int, int>> moves;
+
+    int directions[8][2] = {
+        {-1, -1}, {-1, 0}, {-1, 1},
+        {0, -1},           {0, 1},
+        {1, -1},  {1, 0}, {1, 1}
+    };
+
+    for (int i = 0; i < 8; ++i) {
+        int dr = directions[i][0];
+        int dc = directions[i][1];
+        int newRow = currentRow + dr;
+        int newCol = currentCol + dc;
+
+        while (isValidPos(newRow, newCol)) {
+            PieceWidget* targetPiece = board->getPieceAt(newRow, newCol);
+
+            if (!targetPiece) {
+                moves.append({newRow, newCol});
+            } else if (targetPiece->getPiece()->getPlayer() != getPlayer()) {
+                moves.append({newRow, newCol});
+            }
+
+            newRow += dr;
+            newCol += dc;
+        }
+    }
+
+    return moves;
+}
+
+QList<QPair<int, int>> Ascendant::getPossibleMoves(int currentRow, int currentCol, const Board* board) const {
+    QList<QPair<int, int>> moves;
+
+    int directions[8][2] = {
+        {-1, -1}, {-1, 0}, {-1, 1},
+        {0, -1},           {0, 1},
         {1, -1},  {1, 0}, {1, 1}
     };
 

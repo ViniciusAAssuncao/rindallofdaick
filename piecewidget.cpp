@@ -1,4 +1,3 @@
-
 #include "piecewidget.h"
 #include <QPixmap>
 #include <QFont>
@@ -53,6 +52,12 @@ void PieceWidget::updateAppearance() {
     case PieceType::Bastion:
         imagePath = ":/images/bastion.png";
         break;
+    case PieceType::Champion:
+        imagePath = ":/images/champion.png";
+        break;
+    case PieceType::Ascendant:
+        imagePath = ":/images/ascendant.png";
+        break;
     default:
         imagePath = "";
         break;
@@ -75,9 +80,7 @@ void PieceWidget::updateAppearance() {
     }
 }
 
-void PieceWidget::mousePressEvent(QMouseEvent *event) {
-    if (event->button() == Qt::LeftButton) {
-        emit clicked();
-    }
-    QLabel::mousePressEvent(event);
+void PieceWidget::mousePressEvent(QMouseEvent* event) {
+    emit clicked(event->button());
+    event->accept();
 }

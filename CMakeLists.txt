@@ -41,6 +41,8 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         cell.h
         infopanel.h
         infopanel.cpp
+        recruitmentdialog.h
+        recruitmentdialog.cpp
 
 
 
