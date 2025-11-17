@@ -13,10 +13,11 @@
 #include <QRegularExpression>
 
 GameController::GameController(Board* board, InfoPanel* panel, QObject* parent)
-    : QObject(parent), board(board), infoPanel(panel),
-    selectedPiece(nullptr),
-    player1(nullptr), player2(nullptr), activePlayer(nullptr),
-    turnNumber(1), isAnimating(false), gameActive(true)
+  : QObject(parent), board(board), infoPanel(panel),
+  selectedPiece(nullptr),
+  player1(nullptr), player2(nullptr), activePlayer(nullptr),
+  turnNumber(1), isAnimating(false), gameActive(true),
+  vanguardBonusMovePending(false), vanguardBonusPiece(nullptr)
 {
     connect(board, &Board::cellClicked, this, &GameController::handleCellClicked);
     connect(infoPanel, &InfoPanel::copyLogRequested, this, &GameController::onCopyLogRequested);
@@ -138,7 +139,8 @@ void GameController::placePiece(int row, int col, PieceType type, Player player)
     }
 }
 
-void GameController::handleCellClicked(int row, int col) {
+void GameController::handleCellClicked(int row, int col)
+{
     HumanPlayer* human = dynamic_cast<HumanPlayer*>(activePlayer);
     if (!human) {
         if (gameActive) {
@@ -157,15 +159,21 @@ void GameController::handleCellClicked(int row, int col) {
         return;
     }
 
+    if (vanguardBonusMovePending) {
+        handleVanguardBonusMove(row, col);
+        return;
+    }
+
     if (selectedPiece) {
         moveSelectedPieceTo(row, col);
+        return;
+    }
+
+    PieceWidget* clickedPiece = board->getPieceAt(row, col);
+    if (clickedPiece) {
+        selectPiece(row, col);
     } else {
-        PieceWidget* clickedPiece = board->getPieceAt(row, col);
-        if (clickedPiece) {
-            selectPiece(row, col);
-        } else {
-            handleRecruitment(row, col);
-        }
+        handleRecruitment(row, col);
     }
 }
 
@@ -474,15 +482,18 @@ bool GameController::isProtectedByBastion(int row, int col, Player defender) {
     return false;
 }
 
-int GameController::calculateTotalDefense(int row, int col) {
+int GameController::calculateTotalDefense(int row, int col)
+{
     Cell* cell = board->getCellData(row, col);
-    if (!cell) return 0;
+    if (!cell)
+        return 0;
 
     PieceWidget* piece = board->getPieceAt(row, col);
-    if (!piece) return cell->getDefense();
+    int cellDefense = cell->getDefense();
 
-    Player pieceOwner = piece->getPiece()->getPlayer();
-    int cellDefense = cell->getDefense(pieceOwner);
+    if (!piece)
+        return cellDefense;
+
     int pieceDefense = piece->getPiece()->getCurrentDefense();
 
     return cellDefense + pieceDefense;
@@ -651,24 +662,28 @@ void GameController::moveSelectedPieceTo(int row, int col) {
     selectedPiece = nullptr;
 }
 
-void GameController::performRetroAnimation(PieceWidget* pieceWidget, int fromRow, int fromCol, int toRow, int toCol, bool isCapture) {
+void GameController::performRetroAnimation(PieceWidget* pieceWidget,
+                                           int fromRow, int fromCol,
+                                           int toRow, int toCol,
+                                           bool isCapture,
+                                           bool endTurnAfterMove)
+{
     pieceWidget->hide();
 
-    QTimer::singleShot(100, [this, pieceWidget, fromRow, fromCol, toRow, toCol]() {
+    QTimer::singleShot(100, [this, pieceWidget, fromRow, fromCol, toRow, toCol, endTurnAfterMove]() {
         pieceWidget->show();
 
-        QTimer::singleShot(100, [this, pieceWidget, fromRow, fromCol, toRow, toCol]() {
+        QTimer::singleShot(100, [this, pieceWidget, fromRow, fromCol, toRow, toCol, endTurnAfterMove]() {
             pieces.remove(QPoint(fromRow, fromCol));
             pieces[QPoint(toRow, toCol)] = pieceWidget;
 
             board->movePiece(fromRow, fromCol, toRow, toCol);
-
             updateCellControl(toRow, toCol, activePlayer->getPlayer());
 
             board->clearHighlights();
 
             pieceWidget->hide();
-            QTimer::singleShot(80, [this, pieceWidget, toRow, toCol]() {
+            QTimer::singleShot(80, [this, pieceWidget, toRow, toCol, endTurnAfterMove]() {
                 pieceWidget->show();
 
                 checkAndEvolve(pieceWidget, toRow, toCol);
@@ -676,7 +691,20 @@ void GameController::performRetroAnimation(PieceWidget* pieceWidget, int fromRow
                 selectedPiece = nullptr;
                 updateBastionProtection();
                 isAnimating = false;
-                endTurn();
+
+                if (endTurnAfterMove) {
+                    endTurn();
+                } else {
+                    vanguardBonusMovePending = true;
+                    vanguardBonusPiece = pieceWidget;
+                    vanguardBonusStartPos = QPoint(toRow, toCol);
+                    highlightVanguardBonusMoves(toRow, toCol);
+
+                    emit statusMessage(
+                        "VANGUARD: Select an adjacent cell for your bonus move "
+                        "(or click Vanguard to skip)."
+                        );
+                }
             });
         });
     });
@@ -1530,7 +1558,10 @@ bool GameController::parseAndExecuteMove(const QString& notation)
     return false;
 }
 
-bool GameController::executeMove(PieceWidget* piece, int fromRow, int fromCol, int toRow, int toCol, bool isCapture)
+bool GameController::executeMove(PieceWidget* piece,
+                                 int fromRow, int fromCol,
+                                 int toRow, int toCol,
+                                 bool isCapture)
 {
     isAnimating = true;
 
@@ -1538,17 +1569,25 @@ bool GameController::executeMove(PieceWidget* piece, int fromRow, int fromCol, i
         bool attackSuccess = executeAttack(piece, fromRow, fromCol, toRow, toCol);
 
         if (attackSuccess) {
-            QTimer::singleShot(500, [this, piece, fromRow, fromCol, toRow, toCol, isCapture]() {
-                performRetroAnimation(piece, fromRow, fromCol, toRow, toCol, isCapture);
-            });
-            return true;
+            if (piece->getPiece()->getType() == PieceType::Vanguard) {
+                QTimer::singleShot(500, [this, piece, fromRow, fromCol, toRow, toCol, isCapture]() {
+                    performRetroAnimation(piece, fromRow, fromCol, toRow, toCol, isCapture, false);
+                });
+                return true;
+            } else {
+                QTimer::singleShot(500, [this, piece, fromRow, fromCol, toRow, toCol, isCapture]() {
+                    performRetroAnimation(piece, fromRow, fromCol, toRow, toCol, isCapture, true);
+                });
+                return true;
+            }
         } else {
             isAnimating = false;
             endTurn();
             return true;
         }
+
     } else {
-        performRetroAnimation(piece, fromRow, fromCol, toRow, toCol, isCapture);
+        performRetroAnimation(piece, fromRow, fromCol, toRow, toCol, isCapture, true);
         return true;
     }
 }
@@ -1640,4 +1679,146 @@ QPoint GameController::stringToPos(QString pos) const
 QString GameController::posToString(int row, int col) const
 {
     return QString("%1%2").arg(QChar('A' + col)).arg(12 - row);
+}
+
+bool GameController::isValidPos(int row, int col) const
+{
+    return row >= 0 && row < 12 && col >= 0 && col < 12;
+}
+
+void GameController::highlightVanguardBonusMoves(int row, int col)
+{
+    board->clearHighlights();
+    QList<QPair<int, int>> bonusMoves;
+
+    Player opponent = (activePlayer->getPlayer() == Player::Player1)
+                          ? Player::Player2
+                          : Player::Player1;
+
+    int directions[8][2] = {
+        {-1, -1}, {-1, 0}, {-1, 1},
+        { 0, -1},          { 0, 1},
+        { 1, -1}, { 1, 0}, { 1, 1}
+    };
+
+    for (int i = 0; i < 8; ++i) {
+        int adjRow = row + directions[i][0];
+        int adjCol = col + directions[i][1];
+
+        if (!isValidPos(adjRow, adjCol))
+            continue;
+
+        PieceWidget* adjPiece = board->getPieceAt(adjRow, adjCol);
+
+        if (!adjPiece) {
+            bonusMoves.append({adjRow, adjCol});
+        } else if (adjPiece->getPiece()->getPlayer() == opponent) {
+            int jumpRow = adjRow + directions[i][0];
+            int jumpCol = adjCol + directions[i][1];
+
+            if (isValidPos(jumpRow, jumpCol)
+                && !board->getPieceAt(jumpRow, jumpCol))
+            {
+                bonusMoves.append({jumpRow, jumpCol});
+            }
+        }
+    }
+
+    board->highlightCells(bonusMoves);
+}
+
+void GameController::handleVanguardBonusMove(int toRow, int toCol)
+{
+    if (!vanguardBonusPiece) {
+        vanguardBonusMovePending = false;
+        board->clearHighlights();
+        endTurn();
+        return;
+    }
+
+    QPoint piecePos = pieces.key(vanguardBonusPiece, QPoint(-1, -1));
+    if (piecePos.x() == toRow && piecePos.y() == toCol) {
+        emit statusMessage("Vanguard bonus move skipped.");
+        vanguardBonusMovePending = false;
+        vanguardBonusPiece = nullptr;
+        board->clearHighlights();
+        endTurn();
+        return;
+    }
+
+    int fromRow = vanguardBonusStartPos.x();
+    int fromCol = vanguardBonusStartPos.y();
+
+    int dr = toRow - fromRow;
+    int dc = toCol - fromCol;
+
+    // Movimento adjacente (1 casa)
+    if (qAbs(dr) <= 1 && qAbs(dc) <= 1 && (dr != 0 || dc != 0)) {
+        if (!board->getPieceAt(toRow, toCol)) {
+            emit statusMessage("VANGUARD: Bonus move taken.");
+            vanguardBonusMovePending = false;
+            board->clearHighlights();
+
+            performRetroAnimation(vanguardBonusPiece, fromRow, fromCol, toRow, toCol,
+                                  false, true);
+
+            vanguardBonusPiece = nullptr;
+            return;
+        }
+    }
+
+    // Movimento de salto (2 casas)
+    bool is2SquareJump =
+        (qAbs(dr) == 2 && qAbs(dc) == 0) ||
+        (qAbs(dr) == 0 && qAbs(dc) == 2) ||
+        (qAbs(dr) == 2 && qAbs(dc) == 2);
+
+    if (is2SquareJump) {
+        if (board->getPieceAt(toRow, toCol)) {
+            emit statusMessage("ERROR: Invalid bonus move. Landing spot is occupied.");
+            return;
+        }
+
+        int jumpedRow = fromRow + dr / 2;
+        int jumpedCol = fromCol + dc / 2;
+
+        PieceWidget* jumpedPiece = board->getPieceAt(jumpedRow, jumpedCol);
+
+        Player opponent = (activePlayer->getPlayer() == Player::Player1)
+                              ? Player::Player2
+                              : Player::Player1;
+
+        if (jumpedPiece && jumpedPiece->getPiece()->getPlayer() == opponent) {
+            vanguardBonusMovePending = false;
+            board->clearHighlights();
+
+            emit statusMessage("VANGUARD: En Passant!");
+
+            bool attackSuccess =
+                executeAttack(vanguardBonusPiece, fromRow, fromCol,
+                              jumpedRow, jumpedCol);
+
+            if (attackSuccess) {
+                QTimer::singleShot(500,
+                                   [this, fromRow, fromCol, toRow, toCol]() {
+                                       performRetroAnimation(vanguardBonusPiece,
+                                                             fromRow, fromCol,
+                                                             toRow, toCol,
+                                                             true, true);
+                                       vanguardBonusPiece = nullptr;
+                                   }
+                                   );
+            } else {
+                emit statusMessage("VANGUARD: En Passant FAILED! Target defended.");
+                vanguardBonusPiece = nullptr;
+                endTurn();
+            }
+            return;
+        }
+    }
+
+    emit statusMessage(
+        "ERROR: Invalid bonus move. Select an adjacent square, a jump square, "
+        "or the Vanguard to skip."
+        );
 }

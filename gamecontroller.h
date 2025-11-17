@@ -71,10 +71,18 @@ private:
     void evolvePiece(int row, int col, PieceType newType);
     QString checkEvolutionConditions();
 
+    bool vanguardBonusMovePending;
+    PieceWidget* vanguardBonusPiece;
+    QPoint vanguardBonusStartPos;
+
+    bool isValidPos(int row, int col) const;
+    void highlightVanguardBonusMoves(int row, int col);
+    void handleVanguardBonusMove(int toRow, int toCol);
+
     void setupInitialPieces();
     void selectPiece(int row, int col);
     void moveSelectedPieceTo(int row, int col);
-    void performRetroAnimation(PieceWidget* pieceWidget, int fromRow, int fromCol, int toRow, int toCol, bool isCapture);
+    void performRetroAnimation(PieceWidget* pieceWidget, int fromRow, int fromCol, int toRow, int toCol, bool isCapture, bool endTurnAfterMove);
     void performDestructionAnimation(PieceWidget* pieceWidget, int row, int col);
 
     bool canAttack(PieceWidget* attacker, int targetRow, int targetCol);
