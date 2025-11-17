@@ -1,4 +1,5 @@
 #include "gamecontroller.h"
+#include "audiomanager.h"
 #include "board.h"
 #include "recruitmentdialog.h"
 #include <QTimer>
@@ -10,7 +11,7 @@
 #include <QStandardPaths>
 
 GameController::GameController(Board* board, InfoPanel* panel, QObject* parent)
-    : QObject(parent), board(board), infoPanel(panel), currentPlayer(Player::Player1), turnNumber(1)
+    : QObject(parent), board(board), infoPanel(panel), currentPlayer(Player::Player1), turnNumber(1), gameActive(true)
 {
     connect(board, &Board::cellClicked, this, &GameController::handleCellClicked);
     connect(infoPanel, &InfoPanel::copyLogRequested, this, &GameController::onCopyLogRequested);
@@ -23,6 +24,10 @@ GameController::GameController(Board* board, InfoPanel* panel, QObject* parent)
 }
 
 void GameController::initializeGame() {
+    AudioManager::instance().initialize();
+    AudioManager::instance().playBackgroundMusic();
+    AudioManager::instance().playSoundEffect(SoundEffect::GameStart);
+
     setupInitialPieces();
     board->updateAllCellDisplays();
     updateBastionProtection();
@@ -99,6 +104,11 @@ void GameController::placePiece(int row, int col, PieceType type, Player player)
 }
 
 void GameController::handleCellClicked(int row, int col) {
+    if (!gameActive) {
+        emit statusMessage("GAME OVER: No more actions allowed.");
+        return;
+    }
+
     if (isAnimating) {
         emit statusMessage("ERROR: Ação bloqueada — animação em andamento.");
         return;
@@ -117,6 +127,11 @@ void GameController::handleCellClicked(int row, int col) {
 }
 
 void GameController::handleRecruitment(int row, int col) {
+    if (!gameActive) {
+        emit statusMessage("GAME OVER: No more actions allowed.");
+        return;
+    }
+
     Cell* cell = board->getCellData(row, col);
     if (!cell || !cell->isUnderControl() || cell->getController() != currentPlayer) {
         emit statusMessage("ERROR: Can only recruit on controlled cells.");
@@ -185,6 +200,10 @@ int GameController::calculateRecruitmentCost(PieceType type, Player player) {
 }
 
 bool GameController::canRecruitPiece(PieceType type, Player player, int row, int col, int availableResources) {
+    if (playerStates[player].isInSize) {
+        return false;
+    }
+
     Cell* cell = board->getCellData(row, col);
     if (!cell || !cell->isUnderControl() || cell->getController() != player) {
         return false;
@@ -244,6 +263,8 @@ void GameController::recruitPiece(PieceType type, Player player, int row, int co
     spendResourcesFromAdjacent(row, col, player, cost);
 
     placePiece(row, col, type, player);
+
+    AudioManager::instance().playSoundEffect(SoundEffect::RecruitPiece);
 
     if (type == PieceType::Worker) {
         playerStates[player].workersReplaced++;
@@ -330,6 +351,8 @@ void GameController::checkAndEvolve(PieceWidget* pieceWidget, int row, int col) 
 }
 
 void GameController::evolvePiece(int row, int col, PieceType newType) {
+    AudioManager::instance().playSoundEffect(SoundEffect::PieceEvolved);
+
     PieceWidget* oldPiece = board->getPieceAt(row, col);
     if (!oldPiece) return;
 
@@ -352,6 +375,11 @@ void GameController::evolvePiece(int row, int col, PieceType newType) {
 }
 
 void GameController::selectPiece(int row, int col) {
+    if (!gameActive) {
+        emit statusMessage("GAME OVER: No more actions allowed.");
+        return;
+    }
+
     if (isAnimating) {
         emit statusMessage("ERROR: Não é possível selecionar durante animação.");
         return;
@@ -361,6 +389,18 @@ void GameController::selectPiece(int row, int col) {
         if (pieceWidget->getPiece()->getPlayer() != currentPlayer) {
             emit statusMessage("ERROR: Not your piece.");
             return;
+        }
+
+        if (playerStates[currentPlayer].isInSize) {
+            PieceType type = pieceWidget->getPiece()->getType();
+            if (type == PieceType::Daick) {
+                emit statusMessage("SIZE MODE: Only Daick can move to escape danger.");
+            } else {
+                int totalPieces = countPlayerPieces(currentPlayer);
+                int allowedMoves = (totalPieces + 1) / 2;
+
+                emit statusMessage(QString("SIZE MODE: Limited movement (%1/%2 pieces can move)").arg(allowedMoves).arg(totalPieces));
+            }
         }
 
         selectedPiece = pieceWidget;
@@ -475,9 +515,6 @@ bool GameController::executeAttack(PieceWidget* attacker, int attackerRow, int a
         playerStates[loserPlayer].lastLostPieceType = lostType;
         playerStates[loserPlayer].canRecruitLastLost = false;
 
-        if (lostType == PieceType::Ascendant) {
-        }
-
         isAnimating = true;
         performDestructionAnimation(target, targetRow, targetCol);
 
@@ -518,7 +555,6 @@ bool GameController::executeAttack(PieceWidget* attacker, int attackerRow, int a
 }
 
 void GameController::performDestructionAnimation(PieceWidget* pieceWidget, int row, int col) {
-
     for (int i = 0; i < 3; ++i) {
         QTimer::singleShot(i * 150, [pieceWidget]() {
             pieceWidget->hide();
@@ -529,15 +565,29 @@ void GameController::performDestructionAnimation(PieceWidget* pieceWidget, int r
     }
 
     QTimer::singleShot(450, [this, pieceWidget, row, col]() {
+        PieceType destroyedType = pieceWidget->getPiece()->getType();
+        Player destroyedPlayer = pieceWidget->getPiece()->getPlayer();
+
         board->removePieceFromCell(row, col);
         pieces.remove(QPoint(row, col));
         board->updateCellDisplay(row, col);
 
-        if (pieceWidget->getPiece()->getType() == PieceType::Daick) {
-            Player winner = pieceWidget->getPiece()->getPlayer() == Player::Player1
-                                ? Player::Player2 : Player::Player1;
-            emit alertMessage(QString("GAME OVER! %1 WINS by Daick's Fall!")
-                                  .arg(winner == Player::Player1 ? "Player 1" : "Player 2"));
+        if (destroyedType == PieceType::Daick) {
+            Player winner = (destroyedPlayer == Player::Player1) ? Player::Player2 : Player::Player1;
+            endGame(winner, "Daick's Fall");
+        } else if (destroyedType == PieceType::Ascendant) {
+            Player opponent = (destroyedPlayer == Player::Player1) ? Player::Player2 : Player::Player1;
+            for (int r = 0; r < 12; ++r) {
+                for (int c = 0; c < 12; ++c) {
+                    Cell* cell = board->getCellData(r, c);
+                    if (cell && cell->isUnderControl() && cell->getController() == opponent) {
+                        for (int i = 0; i < 10; ++i) {
+                            cell->addResource(opponent);
+                        }
+                    }
+                }
+            }
+            emit alertMessage("ASCENDANT DESTROYED! Opponent gains 10 resources in all controlled cells!");
         }
     });
 }
@@ -571,6 +621,7 @@ void GameController::moveSelectedPieceTo(int row, int col) {
             }
 
             bool attackSuccess = executeAttack(selectedPiece, selectedPos.x(), selectedPos.y(), row, col);
+            AudioManager::instance().playSoundEffect(SoundEffect::PieceAttacked);
 
             if (attackSuccess) {
                 isAnimating = true;
@@ -680,21 +731,21 @@ void GameController::updateBastionProtection() {
 }
 
 void GameController::endTurn() {
+    if (!gameActive) return;
+
     playerStates[currentPlayer].canRecruitLastLost = true;
 
     QString alertStr = checkResourceGeneration();
-    QString passivityStr = checkPassivity();
     QString evolutionStr = checkEvolutionConditions();
-
-    if (!passivityStr.isEmpty()) {
-        if (!alertStr.isEmpty()) alertStr += "\n";
-        alertStr += passivityStr;
-    }
 
     if (!evolutionStr.isEmpty()) {
         if (!alertStr.isEmpty()) alertStr += "\n";
         alertStr += evolutionStr;
     }
+
+    checkVictoryConditions();
+
+    if (!gameActive) return;
 
     emit alertMessage(alertStr);
 
@@ -712,6 +763,18 @@ void GameController::endTurn() {
 }
 
 QString GameController::checkResourceGeneration() {
+    if (playerStates[currentPlayer].isInSize) {
+        for (int row = 0; row < 12; ++row) {
+            for (int col = 0; col < 12; ++col) {
+                Cell* cell = board->getCellData(row, col);
+                if (cell && cell->hasOwner() && cell->getResourceOwner() == currentPlayer) {
+                    cell->removeResource();
+                }
+            }
+        }
+        return "SIZE DETERIORATION: Lost 1 resource per cell.";
+    }
+
     bool resourceBlocked = false;
     bool resourceGained = false;
     bool defenseFull = false;
@@ -757,33 +820,6 @@ QString GameController::checkResourceGeneration() {
         emit statusMessage("RESOURCE: Worker generated 1 resource.");
     }
 
-    return "";
-}
-
-QString GameController::checkPassivity()
-{
-    int maxResources = 0;
-    QPoint highCell;
-    bool cellFound = false;
-
-    for (int row = 0; row < 12; ++row) {
-        for (int col = 0; col < 12; ++col) {
-            if (Cell* cell = board->getCellData(row, col)) {
-                if (cell->getResources() > maxResources) {
-                    maxResources = cell->getResources();
-                    highCell = QPoint(row, col);
-                    cellFound = true;
-                }
-            }
-        }
-    }
-
-    if (cellFound && maxResources >= 8) {
-        return QString("PASSIVITY: High resources (%1) at %2%3. Unit spawn advised.")
-        .arg(maxResources)
-            .arg(QChar('A' + highCell.y()))
-            .arg(12 - highCell.x());
-    }
     return "";
 }
 
@@ -871,7 +907,8 @@ QString GameController::generateFullGameStateNotation() const
 
     stream << "--- Rindall of Daick: Relatório de Partida ---\n\n";
     stream << "Turno: " << turnNumber << "\n";
-    stream << "Jogador Atual: " << (currentPlayer == Player::Player1 ? "Player 1 (Brancas)" : "Player 2 (Pretas)") << "\n\n";
+    stream << "Jogador Atual: " << (currentPlayer == Player::Player1 ? "Player 1 (Brancas)" : "Player 2 (Pretas)") << "\n";
+    stream << "Status do Jogo: " << (gameActive ? "Em Andamento" : "FINALIZADO") << "\n\n";
 
     stream << "--- Estado do Tabuleiro ---\n";
     stream << QString("%1 | %2 | %3 | %4 | %5\n")
@@ -933,6 +970,10 @@ QString GameController::generateFullGameStateNotation() const
         QString playerStr = (player == Player::Player1) ? "Player 1 (Brancas)" : "Player 2 (Pretas)";
 
         stream << QString("\n%1:\n").arg(playerStr);
+        stream << QString(" - Estado SIZE: %1\n").arg(playerStates[player].isInSize ? "SIM" : "Não");
+        if (playerStates[player].isInSize) {
+            stream << QString(" - Turnos em SIZE: %1/3\n").arg(playerStates[player].turnsInSize);
+        }
         stream << QString(" - Peças Recrutadas:\n");
 
         for (auto it = playerStates[player].piecesRecruited.constBegin(); it != playerStates[player].piecesRecruited.constEnd(); ++it) {
@@ -1165,4 +1206,262 @@ int GameController::calculateBastionRepairCost(int pointsToRepair, Player player
     int costPerPoint = baseCostPerPoint + inflation;
 
     return costPerPoint * pointsToRepair;
+}
+
+void GameController::checkVictoryConditions() {
+    if (!gameActive) return;
+
+    if (checkDaicksFall()) {
+        return;
+    }
+
+    if (checkCountdownToSize(Player::Player1)) {
+        endGame(Player::Player1, "Countdown to Size");
+        return;
+    }
+    if (checkCountdownToSize(Player::Player2)) {
+        endGame(Player::Player2, "Countdown to Size");
+        return;
+    }
+
+
+    Player opponent = (currentPlayer == Player::Player1) ? Player::Player2 : Player::Player1;
+
+    checkSizeCondition(currentPlayer);
+    checkSizeCondition(opponent);
+
+    if (playerStates[opponent].isInSize) {
+        playerStates[opponent].turnsInSize++;
+
+        if (playerStates[opponent].turnsInSize >= 5) {
+            endGame(currentPlayer, "Size's Victory");
+            return;
+        } else {
+            emit alertMessage(QString("WARNING: %1 is in SIZE state! (%2/5 turns)")
+                                  .arg(opponent == Player::Player1 ? "Player 1" : "Player 2")
+                                  .arg(playerStates[opponent].turnsInSize));
+        }
+    }
+
+    int currentResources = getTotalPlayerResources(currentPlayer);
+
+    playerStates[currentPlayer].lastTurnResourceCount = currentResources;
+}
+
+bool GameController::checkDaicksFall() {
+    bool player1HasDaick = false;
+    bool player2HasDaick = false;
+
+    for (auto it = pieces.constBegin(); it != pieces.constEnd(); ++it) {
+        PieceWidget* piece = it.value();
+        if (piece && piece->getPiece()->getType() == PieceType::Daick) {
+            if (piece->getPiece()->getPlayer() == Player::Player1) {
+                player1HasDaick = true;
+            } else {
+                player2HasDaick = true;
+            }
+        }
+    }
+
+    if (!player1HasDaick) {
+        endGame(Player::Player2, "Daick's Fall");
+        return true;
+    }
+
+    if (!player2HasDaick) {
+        endGame(Player::Player1, "Daick's Fall");
+        return true;
+    }
+
+    return false;
+}
+
+bool GameController::checkCountdownToSize(Player winner) {
+    Player loser = (winner == Player::Player1) ? Player::Player2 : Player::Player1;
+
+    if (!playerStates[loser].isInSize) {
+        return false;
+    }
+
+    bool hasRindall = false;
+    bool hasVanguard = false;
+    for (auto it = pieces.constBegin(); it != pieces.constEnd(); ++it) {
+        PieceWidget* piece = it.value();
+        if (piece && piece->getPiece()->getPlayer() == loser) {
+            PieceType type = piece->getPiece()->getType();
+            if (type == PieceType::Rindall) hasRindall = true;
+            if (type == PieceType::Vanguard) hasVanguard = true;
+
+            if (hasRindall && hasVanguard) break;
+        }
+    }
+
+    if (hasRindall || hasVanguard) {
+        return false;
+    }
+
+    int rindallCost = calculateRecruitmentCost(PieceType::Rindall, loser);
+    int vanguardCost = calculateRecruitmentCost(PieceType::Vanguard, loser);
+
+    int minCostToRebuild = qMin(rindallCost, vanguardCost);
+
+    int totalEconomy = getTotalPlayerResources(loser);
+
+    if (totalEconomy >= minCostToRebuild) {
+        return false;
+    }
+
+    return true;
+}
+
+void GameController::checkSizeCondition(Player player) {
+    bool hasWorker = hasWorkers(player);
+    bool hasSentinel = hasSentinels(player);
+
+    if (!hasWorker && !hasSentinel) {
+        if (!playerStates[player].isInSize) {
+            playerStates[player].isInSize = true;
+            playerStates[player].turnsInSize = 0;
+            AudioManager::instance().playSoundEffect(SoundEffect::AlertSize);
+            emit alertMessage(QString("CRITICAL: %1 entered SIZE state! No Workers or Sentinels remaining!")
+                                  .arg(player == Player::Player1 ? "Player 1" : "Player 2"));
+            emit alertMessage(QString("CRITICAL: %1 entered SIZE state! No Workers or Sentinels remaining!")
+                                  .arg(player == Player::Player1 ? "Player 1" : "Player 2"));
+        }
+    } else {
+        if (playerStates[player].isInSize) {
+            playerStates[player].isInSize = false;
+            playerStates[player].turnsInSize = 0;
+            AudioManager::instance().playSoundEffect(SoundEffect::AlertGeneric);
+            emit alertMessage(QString("%1 escaped SIZE state!")
+                                  .arg(player == Player::Player1 ? "Player 1" : "Player 2"));
+            emit alertMessage(QString("%1 escaped SIZE state!")
+                                  .arg(player == Player::Player1 ? "Player 1" : "Player 2"));
+        }
+    }
+}
+
+bool GameController::hasWorkers(Player player) const {
+    for (auto it = pieces.constBegin(); it != pieces.constEnd(); ++it) {
+        PieceWidget* piece = it.value();
+        if (piece && piece->getPiece()->getPlayer() == player) {
+            PieceType type = piece->getPiece()->getType();
+            if (type == PieceType::Worker || type == PieceType::Ascendant) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool GameController::hasSentinels(Player player) const {
+    for (auto it = pieces.constBegin(); it != pieces.constEnd(); ++it) {
+        PieceWidget* piece = it.value();
+        if (piece && piece->getPiece()->getPlayer() == player &&
+            piece->getPiece()->getType() == PieceType::Sentinel) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool GameController::canPlayerMove(Player player) const {
+    int movablePieces = 0;
+
+    for (auto it = pieces.constBegin(); it != pieces.constEnd(); ++it) {
+        PieceWidget* piece = it.value();
+        if (piece && piece->getPiece()->getPlayer() == player) {
+            QPoint pos = it.key();
+            auto moves = piece->getPiece()->getPossibleMoves(pos.x(), pos.y(), board);
+            if (!moves.isEmpty()) {
+                movablePieces++;
+            }
+        }
+    }
+
+    return movablePieces > 0;
+}
+
+int GameController::countPlayerPieces(Player player) const {
+    int count = 0;
+    for (auto it = pieces.constBegin(); it != pieces.constEnd(); ++it) {
+        if (it.value() && it.value()->getPiece()->getPlayer() == player) {
+            count++;
+        }
+    }
+    return count;
+}
+
+int GameController::getTotalPlayerResources(Player player) const {
+    int total = 0;
+    for (int row = 0; row < 12; ++row) {
+        for (int col = 0; col < 12; ++col) {
+            Cell* cell = board->getCellData(row, col);
+            if (cell && cell->isUnderControl() && cell->getController() == player) {
+                if (cell->hasOwner() && cell->getResourceOwner() == player) {
+                    total += cell->getResources();
+                }
+            }
+        }
+    }
+    return total;
+}
+
+void GameController::endGame(Player winner, const QString& victoryType) {
+    if (!gameActive) return;
+
+    gameActive = false;
+
+    AudioManager::instance().playSoundEffect(SoundEffect::AlertVictory);
+
+    board->clearHighlights();
+    selectedPiece = nullptr;
+
+    QString notation = QString("GAME_END:%1_WINS_BY_%2")
+                           .arg(winner == Player::Player1 ? "WHITE" : "BLACK")
+                           .arg(victoryType.toUpper().replace(" ", "_"));
+
+    emit moveMade(notation, winner);
+
+    displayVictoryScreen(winner, victoryType);
+}
+
+void GameController::displayVictoryScreen(Player winner, const QString& victoryType) {
+    QString winnerName = (winner == Player::Player1) ? "PLAYER 1 (BRANCAS)" : "PLAYER 2 (PRETAS)";
+
+    QString victoryMessage = QString("═══════════════════════════════\n"
+                                     "     VITÓRIA!\n"
+                                     "═══════════════════════════════\n\n"
+                                     "%1\n"
+                                     "VENCEU POR:\n"
+                                     "%2\n\n"
+                                     "Turno Final: %3\n"
+                                     "═══════════════════════════════")
+                                 .arg(winnerName)
+                                 .arg(victoryType.toUpper())
+                                 .arg(turnNumber);
+
+    emit alertMessage(victoryMessage);
+    emit statusMessage("GAME OVER - Match concluded.");
+
+    for (int blink = 0; blink < 6; ++blink) {
+        QTimer::singleShot(blink * 200, [this, blink]() {
+            for (int row = 0; row < 12; ++row) {
+                for (int col = 0; col < 12; ++col) {
+                    QPushButton* cell = board->getCellButton(row, col);
+                    if (cell) {
+                        if (blink % 2 == 0) {
+                            cell->setStyleSheet("QPushButton { background-color: black; color: white; border: 1px solid white; }");
+                        } else {
+                            board->updateCellDisplay(row, col);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    QTimer::singleShot(1200, [this]() {
+        board->updateAllCellDisplays();
+    });
 }

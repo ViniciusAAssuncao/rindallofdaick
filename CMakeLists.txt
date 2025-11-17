@@ -9,8 +9,8 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets LinguistTools)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets LinguistTools)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets LinguistTools Multimedia)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets LinguistTools Multimedia)
 
 set(TS_FILES rindallofdaick_pt_BR.ts)
 
@@ -43,6 +43,11 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         infopanel.cpp
         recruitmentdialog.h
         recruitmentdialog.cpp
+        audio.qrc
+        audiomanager.h
+        audiomanager.cpp
+        audiosettingsdialog.h
+        audiosettingsdialog.cpp
 
 
 
@@ -71,7 +76,7 @@ else()
     qt5_create_translation(QM_FILES ${CMAKE_SOURCE_DIR} ${TS_FILES})
 endif()
 
-target_link_libraries(rindallofdaick PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+target_link_libraries(rindallofdaick PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt6::Multimedia)
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
 # If you are developing for iOS or macOS you should consider setting an

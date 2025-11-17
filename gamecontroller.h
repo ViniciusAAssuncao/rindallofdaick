@@ -25,6 +25,10 @@ struct PlayerState {
     bool canRecruitLastLost = true;
     QHash<PieceType, int> piecesRecruited;
     int bastionRepairs = 0;
+    bool isInSize = false;
+    int turnsInSize = 0;
+    int passiveTurns = 0;
+    int lastTurnResourceCount = 0;
 
     PlayerState() : workersReplaced(0), hasAscendant(false),
         lastLostPieceType(PieceType::Footman), canRecruitLastLost(true),
@@ -89,6 +93,18 @@ private:
     bool hasAdjacentWorker(int row, int col, Player player) const;
     int calculateBastionRepairCost(int pointsToRepair, Player player) const;
 
+    void checkVictoryConditions();
+    bool checkDaicksFall();
+    bool checkCountdownToSize(Player winner);
+    void checkSizeCondition(Player player);
+    bool hasWorkers(Player player) const;
+    bool hasSentinels(Player player) const;
+    bool canPlayerMove(Player player) const;
+    int countPlayerPieces(Player player) const;
+    int getTotalPlayerResources(Player player) const;
+    void endGame(Player winner, const QString& victoryType);
+    void displayVictoryScreen(Player winner, const QString& victoryType);
+
     QHash<Player, PlayerState> playerStates;
     BaseCosts baseCosts;
 
@@ -101,6 +117,7 @@ private:
     Player currentPlayer;
     int turnNumber;
     bool isAnimating = false;
+    bool gameActive = true;
 };
 
 #endif

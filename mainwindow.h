@@ -1,4 +1,3 @@
-// MODIFICAR mainwindow.h:
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
@@ -17,10 +16,20 @@ public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
+private slots:
+    void openAudioSettings();
+    void toggleMusic();
+    void toggleSFX();
+    void startNewGame();
+    void openEngineSettings();
+
 private:
+    void createMenuBar();
+
     Board *board;
     GameController *gameController;
     InfoPanel *infoPanel;
+    QHBoxLayout *mainLayout;
 };
 
 #endif

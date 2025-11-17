@@ -1,4 +1,5 @@
 #include "board.h"
+#include "audiomanager.h"
 #include <QFont>
 #include <QTimer>
 
@@ -91,6 +92,7 @@ void Board::removePieceFromCell(int row, int col) {
 }
 
 void Board::movePiece(int fromRow, int fromCol, int toRow, int toCol) {
+    AudioManager::instance().playSoundEffect(SoundEffect::MovePiece);
     PieceWidget* pieceToMove = getPieceAt(fromRow, fromCol);
 
     if (pieceToMove) {
