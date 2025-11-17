@@ -10,6 +10,32 @@
 
 class Board;
 
+struct BaseCosts {
+    const int footman = 2;
+    const int vanguard = 4;
+    const int sentinel = 3;
+    const int rindall = 10;
+    const int bastion = 6;
+};
+
+struct PlayerState {
+    int workersReplaced = 0;
+    bool hasAscendant = false;
+    PieceType lastLostPieceType = PieceType::Footman;
+    bool canRecruitLastLost = true;
+    QHash<PieceType, int> piecesRecruited;
+    int bastionRepairs = 0;
+    bool isInSize = false;
+    int turnsInSize = 0;
+    int passiveTurns = 0;
+    int lastTurnResourceCount = 0;
+
+    PlayerState() : workersReplaced(0), hasAscendant(false),
+        lastLostPieceType(PieceType::Footman), canRecruitLastLost(true),
+        bastionRepairs(0) {}
+};
+
+
 class GameController : public QObject
 {
     Q_OBJECT
@@ -32,18 +58,55 @@ private slots:
     void handleCellClicked(int row, int col);
 
 private:
+    void handleRecruitment(int row, int col);
+    int calculateRecruitmentCost(PieceType type, Player player);
+    bool canRecruitPiece(PieceType type, Player player, int row, int col, int availableResources);
+    void recruitPiece(PieceType type, Player player, int row, int col);
+    void checkAndEvolve(PieceWidget* pieceWidget, int row, int col);
+    void evolvePiece(int row, int col, PieceType newType);
+    QString checkEvolutionConditions();
+
     void setupInitialPieces();
     void selectPiece(int row, int col);
     void moveSelectedPieceTo(int row, int col);
     void performRetroAnimation(PieceWidget* pieceWidget, int toRow, int toCol, bool isCapture);
+    void performDestructionAnimation(PieceWidget* pieceWidget, int row, int col);
+
+    bool canAttack(PieceWidget* attacker, int targetRow, int targetCol);
+    bool isProtectedByBastion(int row, int col, Player defender);
+    int calculateTotalDefense(int row, int col);
+    bool executeAttack(PieceWidget* attacker, int attackerRow, int attackerCol, int targetRow, int targetCol);
+    void consumeCellResources(int row, int col, int attackPower);
 
     void endTurn();
     QString checkResourceGeneration();
     QString checkPassivity();
     bool isSentinelBlockingCell(int row, int col, Player resourcePlayer);
     void updateCellControl(int row, int col, Player player);
+    void updateBastionProtection();
     QString generateMoveNotation(PieceWidget* piece, int toRow, int toCol, bool isCapture) const;
     QString generateFullGameStateNotation() const;
+
+    int getAdjacentResourceSum(int row, int col, Player player) const;
+    void spendResourcesFromAdjacent(int row, int col, Player player, int cost);
+    void handleBastionRehabilitation(int row, int col);
+    bool hasAdjacentWorker(int row, int col, Player player) const;
+    int calculateBastionRepairCost(int pointsToRepair, Player player) const;
+
+    void checkVictoryConditions();
+    bool checkDaicksFall();
+    bool checkCountdownToSize(Player winner);
+    void checkSizeCondition(Player player);
+    bool hasWorkers(Player player) const;
+    bool hasSentinels(Player player) const;
+    bool canPlayerMove(Player player) const;
+    int countPlayerPieces(Player player) const;
+    int getTotalPlayerResources(Player player) const;
+    void endGame(Player winner, const QString& victoryType);
+    void displayVictoryScreen(Player winner, const QString& victoryType);
+
+    QHash<Player, PlayerState> playerStates;
+    BaseCosts baseCosts;
 
     Board* board;
     InfoPanel* infoPanel;
@@ -53,6 +116,8 @@ private:
 
     Player currentPlayer;
     int turnNumber;
+    bool isAnimating = false;
+    bool gameActive = true;
 };
 
 #endif

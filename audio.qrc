@@ -1,0 +1,12 @@
+<RCC>
+    <qresource prefix="/music">
+        <file>sfx_attack.wav</file>
+        <file>sfx_evolve.wav</file>
+        <file>sfx_move.wav</file>
+        <file>sfx_alert.wav</file>
+        <file>sfx_alert_size.wav</file>
+        <file>sfx_gamestart.wav</file>
+        <file>sfx_recruit.wav</file>
+        <file>sfx_victory.wav</file>
+    </qresource>
+</RCC>

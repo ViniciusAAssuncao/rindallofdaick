@@ -12,9 +12,9 @@ public:
     Piece* getPiece() const;
     void updateAppearance();
 protected:
-    void mousePressEvent(QMouseEvent *event) override;
+    void mousePressEvent(QMouseEvent* event) override;
 signals:
-    void clicked();
+    void clicked(Qt::MouseButton button);
 private:
     Piece* piece;
 };

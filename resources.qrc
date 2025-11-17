@@ -1,6 +1,5 @@
 <RCC>
     <qresource prefix="/images">
-        <file>worker.png</file>
         <file>daick.png</file>
         <file>rindall.png</file>
         <file>footman.png</file>
@@ -9,5 +8,8 @@
         <file>bastion.png</file>
         <file>downloadicon.png</file>
         <file>copyicon.png</file>
+        <file>worker.png</file>
+        <file>ascendant.png</file>
+        <file>champion.png</file>
     </qresource>
 </RCC>
