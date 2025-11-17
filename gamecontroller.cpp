@@ -13,11 +13,11 @@
 #include <QRegularExpression>
 
 GameController::GameController(Board* board, InfoPanel* panel, QObject* parent)
-  : QObject(parent), board(board), infoPanel(panel),
-  selectedPiece(nullptr),
-  player1(nullptr), player2(nullptr), activePlayer(nullptr),
-  turnNumber(1), isAnimating(false), gameActive(true),
-  vanguardBonusMovePending(false), vanguardBonusPiece(nullptr)
+    : QObject(parent), board(board), infoPanel(panel),
+    selectedPiece(nullptr),
+    player1(nullptr), player2(nullptr), activePlayer(nullptr),
+    turnNumber(1), isAnimating(false), gameActive(true),
+    vanguardBonusMovePending(false), vanguardBonusPiece(nullptr)
 {
     connect(board, &Board::cellClicked, this, &GameController::handleCellClicked);
     connect(infoPanel, &InfoPanel::copyLogRequested, this, &GameController::onCopyLogRequested);
@@ -130,7 +130,7 @@ void GameController::placePiece(int row, int col, PieceType type, Player player)
             QPoint currentPos = pieces.key(pieceWidget, QPoint(-1, -1));
             if (currentPos != QPoint(-1, -1)) {
                 if (button == Qt::RightButton) {
-                    handleBastionRehabilitation(currentPos.x(), currentPos.y());
+                    handleRightClickAction(currentPos.x(), currentPos.y());
                 } else {
                     handleCellClicked(currentPos.x(), currentPos.y());
                 }
@@ -275,12 +275,6 @@ bool GameController::canRecruitPiece(PieceType type, Player player, int row, int
             return false;
         }
 
-        int defenseRequired = (playerStates[player].workersReplaced == 0) ? 6 : 10;
-
-        if (cell->getDefense() < defenseRequired) {
-            return false;
-        }
-
         int adjacentAllies = 0;
         int directions[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
         for (int i = 0; i < 4; ++i) {
@@ -397,6 +391,12 @@ void GameController::evolvePiece(int row, int col, PieceType newType) {
 
     PieceWidget* newPiece = board->getPieceAt(row, col);
     if (newPiece && newType == PieceType::Champion) {
+        for (int i = 0; i < killCount; ++i) {
+            newPiece->getPiece()->incrementKillCount();
+        }
+    }
+
+    if (newPiece && newType == PieceType::Worker) {
         for (int i = 0; i < killCount; ++i) {
             newPiece->getPiece()->incrementKillCount();
         }
@@ -818,7 +818,7 @@ QString GameController::checkResourceGeneration() {
                 Cell* cell = board->getCellData(row, col);
 
                 if (cell && cell->isUnderControl() && cell->getController() == activePlayer->getPlayer()) {
-                    if (cell->getDefense() >= 5) {
+                    if (cell->getResources() >= 5) {
                         defenseFull = true;
                     } else if (isSentinelBlockingCell(row, col, opponent)) {
                         resourceBlocked = true;
@@ -995,6 +995,7 @@ QString GameController::generateFullGameStateNotation() const
         if (playerStates[player].isInSize) {
             stream << QString(" - Turnos em SIZE: %1/3\n").arg(playerStates[player].turnsInSize);
         }
+        stream << QString(" - Conversão Footman->Worker Usada: %1\n").arg(playerStates[player].footmanToWorkerUsed ? "SIM" : "Não");
         stream << QString(" - Peças Recrutadas:\n");
 
         for (auto it = playerStates[player].piecesRecruited.constBegin(); it != playerStates[player].piecesRecruited.constEnd(); ++it) {
@@ -1139,20 +1140,42 @@ void GameController::spendResourcesFromAdjacent(int row, int col, Player player,
     }
 }
 
-void GameController::handleBastionRehabilitation(int row, int col) {
-    PieceWidget* bastion = board->getPieceAt(row, col);
-    if (!bastion) {
+void GameController::handleRightClickAction(int row, int col) {
+    PieceWidget* piece = board->getPieceAt(row, col);
+    if (!piece) {
         return;
     }
 
-    if (bastion->getPiece()->getType() != PieceType::Bastion) {
-        return;
-    }
-
-    if (bastion->getPiece()->getPlayer() != activePlayer->getPlayer()) {
+    if (piece->getPiece()->getPlayer() != activePlayer->getPlayer()) {
         emit statusMessage("ERROR: Not your piece.");
         return;
     }
+
+    HumanPlayer* human = dynamic_cast<HumanPlayer*>(activePlayer);
+    if (!human) {
+        emit statusMessage("ERROR: Not a human player.");
+        return;
+    }
+    if (isAnimating) {
+        emit statusMessage("ERROR: Ação bloqueada — animação em andamento.");
+        return;
+    }
+    if (!gameActive) {
+        emit statusMessage("GAME OVER: No more actions allowed.");
+        return;
+    }
+
+    PieceType type = piece->getPiece()->getType();
+
+    if (type == PieceType::Bastion) {
+        checkAndSendBastionRepair(row, col);
+    } else if (type == PieceType::Footman) {
+        checkAndSendFootmanConversion(row, col);
+    }
+}
+
+void GameController::checkAndSendBastionRepair(int row, int col) {
+    PieceWidget* bastion = board->getPieceAt(row, col);
 
     if (bastion->getPiece()->getCurrentDefense() >= bastion->getPiece()->getDefensePower()) {
         emit statusMessage("BASTION: Already at full defense. No rehabilitation needed.");
@@ -1183,6 +1206,43 @@ void GameController::handleBastionRehabilitation(int row, int col) {
     }
 }
 
+void GameController::checkAndSendFootmanConversion(int row, int col) {
+    Player player = activePlayer->getPlayer();
+
+    if (playerStates[player].isInSize) {
+        emit statusMessage("ERROR: Cannot perform special actions during SIZE.");
+        return;
+    }
+
+    if (playerStates[player].footmanToWorkerUsed) {
+        emit statusMessage("ERROR: Special Footman-to-Worker conversion already used this game.");
+        return;
+    }
+
+    if (!hasAdjacentSentinel(row, col, player)) {
+        emit statusMessage("ERROR: Footman conversion requires an adjacent allied Sentinel.");
+        return;
+    }
+
+    const int cost = 8;
+    int availableResources = getAdjacentResourceSum(row, col, player);
+
+    if (availableResources < cost) {
+        emit statusMessage(QString("ERROR: Footman conversion requires %1 resources. (Available: %2)")
+                               .arg(cost)
+                               .arg(availableResources));
+        return;
+    }
+
+    QString notation = QString("F_CONVERT@%1").arg(posToString(row, col));
+
+    HumanPlayer* human = dynamic_cast<HumanPlayer*>(activePlayer);
+    if (human) {
+        human->processHumanMove(notation);
+    }
+}
+
+
 bool GameController::hasAdjacentWorker(int row, int col, Player player) const {
     int directions[8][2] = {
         {-1, -1}, {-1, 0}, {-1, 1},
@@ -1206,6 +1266,31 @@ bool GameController::hasAdjacentWorker(int row, int col, Player player) const {
     }
     return false;
 }
+
+bool GameController::hasAdjacentSentinel(int row, int col, Player player) const {
+    int directions[8][2] = {
+        {-1, -1}, {-1, 0}, {-1, 1},
+        {0, -1},           {0, 1},
+        {1, -1},  {1, 0},  {1, 1}
+    };
+
+    for (int i = 0; i < 8; ++i) {
+        int checkRow = row + directions[i][0];
+        int checkCol = col + directions[i][1];
+
+        if (checkRow >= 0 && checkRow < 12 && checkCol >= 0 && checkCol < 12) {
+            PieceWidget* piece = board->getPieceAt(checkRow, checkCol);
+            if (piece &&
+                piece->getPiece()->getPlayer() == player &&
+                piece->getPiece()->getType() == PieceType::Sentinel)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 
 int GameController::calculateBastionRepairCost(int pointsToRepair, Player player) const {
     const int baseCostPerPoint = 1;
@@ -1504,6 +1589,10 @@ bool GameController::parseAndExecuteMove(const QString& notation)
             QPoint pos = stringToPos(notation.mid(9));
             return executeBastionRepair(pos.x(), pos.y());
         }
+        else if (notation.startsWith("F_CONVERT@")) {
+            QPoint pos = stringToPos(notation.mid(10));
+            return executeFootmanConversion(pos.x(), pos.y());
+        }
         else if (match.hasMatch()) {
             QString pieceSymbol = match.captured(1);
             QPoint pos = stringToPos(match.captured(2));
@@ -1668,6 +1757,46 @@ bool GameController::executeBastionRepair(int row, int col)
     return true;
 }
 
+bool GameController::executeFootmanConversion(int row, int col)
+{
+    Player player = activePlayer->getPlayer();
+    const int cost = 8;
+
+    int availableResources = getAdjacentResourceSum(row, col, player);
+    if (availableResources < cost) {
+        qWarning() << "executeFootmanConversion: Resource check failed post-notation.";
+        return false;
+    }
+
+    if (playerStates[player].footmanToWorkerUsed) {
+        qWarning() << "executeFootmanConversion: Already used.";
+        return false;
+    }
+
+    if (playerStates[player].isInSize) {
+        qWarning() << "executeFootmanConversion: Cannot use in SIZE.";
+        return false;
+    }
+
+    if (!hasAdjacentSentinel(row, col, player)) {
+        qWarning() << "executeFootmanConversion: No adjacent Sentinel.";
+        return false;
+    }
+
+    spendResourcesFromAdjacent(row, col, player, cost);
+    playerStates[player].footmanToWorkerUsed = true;
+
+    evolvePiece(row, col, PieceType::Worker);
+
+    emit statusMessage(QString("AÇÃO: Footman em %1 convertido para Worker por %2 recursos!")
+                           .arg(posToString(row, col))
+                           .arg(cost));
+
+    endTurn();
+    return true;
+}
+
+
 QPoint GameController::stringToPos(QString pos) const
 {
     if (pos.isEmpty()) return QPoint(-1, -1);
@@ -1752,7 +1881,6 @@ void GameController::handleVanguardBonusMove(int toRow, int toCol)
     int dr = toRow - fromRow;
     int dc = toCol - fromCol;
 
-    // Movimento adjacente (1 casa)
     if (qAbs(dr) <= 1 && qAbs(dc) <= 1 && (dr != 0 || dc != 0)) {
         if (!board->getPieceAt(toRow, toCol)) {
             emit statusMessage("VANGUARD: Bonus move taken.");
@@ -1767,7 +1895,6 @@ void GameController::handleVanguardBonusMove(int toRow, int toCol)
         }
     }
 
-    // Movimento de salto (2 casas)
     bool is2SquareJump =
         (qAbs(dr) == 2 && qAbs(dc) == 0) ||
         (qAbs(dr) == 0 && qAbs(dc) == 2) ||

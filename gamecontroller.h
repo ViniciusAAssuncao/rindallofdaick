@@ -32,10 +32,11 @@ struct PlayerState {
     int turnsInSize = 0;
     int passiveTurns = 0;
     int lastTurnResourceCount = 0;
+    bool footmanToWorkerUsed = false;
 
     PlayerState() : workersReplaced(0), hasAscendant(false),
         lastLostPieceType(PieceType::Footman), canRecruitLastLost(true),
-        bastionRepairs(0) {}
+        bastionRepairs(0), footmanToWorkerUsed(false) {}
 };
 
 
@@ -60,6 +61,7 @@ signals:
 
 private slots:
     void handleCellClicked(int row, int col);
+    void handleRightClickAction(int row, int col);
     void onMoveReceived(const QString& moveNotation);
 
 private:
@@ -102,8 +104,11 @@ private:
 
     int getAdjacentResourceSum(int row, int col, Player player) const;
     void spendResourcesFromAdjacent(int row, int col, Player player, int cost);
-    void handleBastionRehabilitation(int row, int col);
+
+    void checkAndSendBastionRepair(int row, int col);
+    void checkAndSendFootmanConversion(int row, int col);
     bool hasAdjacentWorker(int row, int col, Player player) const;
+    bool hasAdjacentSentinel(int row, int col, Player player) const;
     int calculateBastionRepairCost(int pointsToRepair, Player player) const;
 
     void checkVictoryConditions();
@@ -122,6 +127,7 @@ private:
     bool executeMove(PieceWidget* piece, int fromRow, int fromCol, int toRow, int toCol, bool isCapture);
     bool executeRecruitment(PieceType type, int row, int col);
     bool executeBastionRepair(int row, int col);
+    bool executeFootmanConversion(int row, int col);
 
     QPoint stringToPos(QString pos) const;
     QString posToString(int row, int col) const;
