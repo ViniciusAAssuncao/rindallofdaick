@@ -48,6 +48,16 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         audiomanager.cpp
         audiosettingsdialog.h
         audiosettingsdialog.cpp
+        abstractplayer.h
+        humanplayer.h
+        humanplayer.cpp
+
+
+        engineplayer.h
+        engineplayer.cpp
+        enginesettingsdialog.h
+        enginesettingsdialog.cpp
+
 
 
 

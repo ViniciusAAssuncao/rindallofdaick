@@ -7,6 +7,9 @@
 #include "pieces.h"
 #include "piecewidget.h"
 #include "infopanel.h"
+#include "abstractplayer.h"
+#include "humanplayer.h"
+#include "engineplayer.h"
 
 class Board;
 
@@ -29,10 +32,11 @@ struct PlayerState {
     int turnsInSize = 0;
     int passiveTurns = 0;
     int lastTurnResourceCount = 0;
+    bool footmanToWorkerUsed = false;
 
     PlayerState() : workersReplaced(0), hasAscendant(false),
         lastLostPieceType(PieceType::Footman), canRecruitLastLost(true),
-        bastionRepairs(0) {}
+        bastionRepairs(0), footmanToWorkerUsed(false) {}
 };
 
 
@@ -42,6 +46,7 @@ class GameController : public QObject
 public:
     explicit GameController(Board* board, InfoPanel* panel, QObject* parent = nullptr);
     void initializeGame();
+    void setEnginePaths(const QString& p1Path, const QString& p2Path);
     void placePiece(int row, int col, PieceType type, Player player);
     void onCopyLogRequested();
     void onDownloadLogRequested();
@@ -56,6 +61,8 @@ signals:
 
 private slots:
     void handleCellClicked(int row, int col);
+    void handleRightClickAction(int row, int col);
+    void onMoveReceived(const QString& moveNotation);
 
 private:
     void handleRecruitment(int row, int col);
@@ -66,10 +73,18 @@ private:
     void evolvePiece(int row, int col, PieceType newType);
     QString checkEvolutionConditions();
 
+    bool vanguardBonusMovePending;
+    PieceWidget* vanguardBonusPiece;
+    QPoint vanguardBonusStartPos;
+
+    bool isValidPos(int row, int col) const;
+    void highlightVanguardBonusMoves(int row, int col);
+    void handleVanguardBonusMove(int toRow, int toCol);
+
     void setupInitialPieces();
     void selectPiece(int row, int col);
     void moveSelectedPieceTo(int row, int col);
-    void performRetroAnimation(PieceWidget* pieceWidget, int toRow, int toCol, bool isCapture);
+    void performRetroAnimation(PieceWidget* pieceWidget, int fromRow, int fromCol, int toRow, int toCol, bool isCapture, bool endTurnAfterMove);
     void performDestructionAnimation(PieceWidget* pieceWidget, int row, int col);
 
     bool canAttack(PieceWidget* attacker, int targetRow, int targetCol);
@@ -84,13 +99,16 @@ private:
     bool isSentinelBlockingCell(int row, int col, Player resourcePlayer);
     void updateCellControl(int row, int col, Player player);
     void updateBastionProtection();
-    QString generateMoveNotation(PieceWidget* piece, int toRow, int toCol, bool isCapture) const;
+    QString generateMoveNotation(PieceWidget* piece, int fromRow, int fromCol, int toRow, int toCol, bool isCapture) const;
     QString generateFullGameStateNotation() const;
 
     int getAdjacentResourceSum(int row, int col, Player player) const;
     void spendResourcesFromAdjacent(int row, int col, Player player, int cost);
-    void handleBastionRehabilitation(int row, int col);
+
+    void checkAndSendBastionRepair(int row, int col);
+    void checkAndSendFootmanConversion(int row, int col);
     bool hasAdjacentWorker(int row, int col, Player player) const;
+    bool hasAdjacentSentinel(int row, int col, Player player) const;
     int calculateBastionRepairCost(int pointsToRepair, Player player) const;
 
     void checkVictoryConditions();
@@ -105,6 +123,15 @@ private:
     void endGame(Player winner, const QString& victoryType);
     void displayVictoryScreen(Player winner, const QString& victoryType);
 
+    bool parseAndExecuteMove(const QString& notation);
+    bool executeMove(PieceWidget* piece, int fromRow, int fromCol, int toRow, int toCol, bool isCapture);
+    bool executeRecruitment(PieceType type, int row, int col);
+    bool executeBastionRepair(int row, int col);
+    bool executeFootmanConversion(int row, int col);
+
+    QPoint stringToPos(QString pos) const;
+    QString posToString(int row, int col) const;
+
     QHash<Player, PlayerState> playerStates;
     BaseCosts baseCosts;
 
@@ -114,7 +141,13 @@ private:
     PieceWidget* selectedPiece = nullptr;
     QPoint selectedPos;
 
-    Player currentPlayer;
+    IPlayer* player1;
+    IPlayer* player2;
+    IPlayer* activePlayer;
+
+    QString m_player1EnginePath;
+    QString m_player2EnginePath;
+
     int turnNumber;
     bool isAnimating = false;
     bool gameActive = true;

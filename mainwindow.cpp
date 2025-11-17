@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "audiosettingsdialog.h"
+#include "enginesettingsdialog.h"
 #include "audiomanager.h"
 #include <QApplication>
 #include <QFontDatabase>
@@ -7,6 +8,7 @@
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
+#include <QSettings>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -55,6 +57,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     setStyleSheet("QMainWindow { background-color: white; }");
 
+    loadEngineSettings();
+    gameController->setEnginePaths(m_player1EnginePath, m_player2EnginePath);
     gameController->initializeGame();
 }
 
@@ -181,9 +185,23 @@ void MainWindow::startNewGame()
     mainLayout->addWidget(board);
     mainLayout->addWidget(infoPanel);
 
+    loadEngineSettings();
+    gameController->setEnginePaths(m_player1EnginePath, m_player2EnginePath);
     gameController->initializeGame();
 }
 
 void MainWindow::openEngineSettings()
 {
+    EngineSettingsDialog dialog(this);
+    if (dialog.exec() == QDialog::Accepted) {
+        loadEngineSettings();
+        emit infoPanel->updateStatus("Configurações da engine salvas. Inicie um novo jogo para aplicar.");
+    }
+}
+
+void MainWindow::loadEngineSettings()
+{
+    QSettings settings("RindallOfDaick", "EngineSettings");
+    m_player1EnginePath = settings.value("player1/enginePath").toString();
+    m_player2EnginePath = settings.value("player2/enginePath").toString();
 }
