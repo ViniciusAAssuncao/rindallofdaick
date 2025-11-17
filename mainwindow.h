@@ -25,11 +25,15 @@ private slots:
 
 private:
     void createMenuBar();
+    void loadEngineSettings();
 
     Board *board;
     GameController *gameController;
     InfoPanel *infoPanel;
     QHBoxLayout *mainLayout;
+
+    QString m_player1EnginePath;
+    QString m_player2EnginePath;
 };
 
 #endif

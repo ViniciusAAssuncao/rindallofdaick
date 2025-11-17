@@ -7,6 +7,9 @@
 #include "pieces.h"
 #include "piecewidget.h"
 #include "infopanel.h"
+#include "abstractplayer.h"
+#include "humanplayer.h"
+#include "engineplayer.h"
 
 class Board;
 
@@ -42,6 +45,7 @@ class GameController : public QObject
 public:
     explicit GameController(Board* board, InfoPanel* panel, QObject* parent = nullptr);
     void initializeGame();
+    void setEnginePaths(const QString& p1Path, const QString& p2Path);
     void placePiece(int row, int col, PieceType type, Player player);
     void onCopyLogRequested();
     void onDownloadLogRequested();
@@ -56,6 +60,7 @@ signals:
 
 private slots:
     void handleCellClicked(int row, int col);
+    void onMoveReceived(const QString& moveNotation);
 
 private:
     void handleRecruitment(int row, int col);
@@ -69,7 +74,7 @@ private:
     void setupInitialPieces();
     void selectPiece(int row, int col);
     void moveSelectedPieceTo(int row, int col);
-    void performRetroAnimation(PieceWidget* pieceWidget, int toRow, int toCol, bool isCapture);
+    void performRetroAnimation(PieceWidget* pieceWidget, int fromRow, int fromCol, int toRow, int toCol, bool isCapture);
     void performDestructionAnimation(PieceWidget* pieceWidget, int row, int col);
 
     bool canAttack(PieceWidget* attacker, int targetRow, int targetCol);
@@ -84,7 +89,7 @@ private:
     bool isSentinelBlockingCell(int row, int col, Player resourcePlayer);
     void updateCellControl(int row, int col, Player player);
     void updateBastionProtection();
-    QString generateMoveNotation(PieceWidget* piece, int toRow, int toCol, bool isCapture) const;
+    QString generateMoveNotation(PieceWidget* piece, int fromRow, int fromCol, int toRow, int toCol, bool isCapture) const;
     QString generateFullGameStateNotation() const;
 
     int getAdjacentResourceSum(int row, int col, Player player) const;
@@ -105,6 +110,14 @@ private:
     void endGame(Player winner, const QString& victoryType);
     void displayVictoryScreen(Player winner, const QString& victoryType);
 
+    bool parseAndExecuteMove(const QString& notation);
+    bool executeMove(PieceWidget* piece, int fromRow, int fromCol, int toRow, int toCol, bool isCapture);
+    bool executeRecruitment(PieceType type, int row, int col);
+    bool executeBastionRepair(int row, int col);
+
+    QPoint stringToPos(QString pos) const;
+    QString posToString(int row, int col) const;
+
     QHash<Player, PlayerState> playerStates;
     BaseCosts baseCosts;
 
@@ -114,7 +127,13 @@ private:
     PieceWidget* selectedPiece = nullptr;
     QPoint selectedPos;
 
-    Player currentPlayer;
+    IPlayer* player1;
+    IPlayer* player2;
+    IPlayer* activePlayer;
+
+    QString m_player1EnginePath;
+    QString m_player2EnginePath;
+
     int turnNumber;
     bool isAnimating = false;
     bool gameActive = true;

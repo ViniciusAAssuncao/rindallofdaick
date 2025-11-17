@@ -9,9 +9,14 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QStandardPaths>
+#include <QDebug>
+#include <QRegularExpression>
 
 GameController::GameController(Board* board, InfoPanel* panel, QObject* parent)
-    : QObject(parent), board(board), infoPanel(panel), currentPlayer(Player::Player1), turnNumber(1), gameActive(true)
+    : QObject(parent), board(board), infoPanel(panel),
+    selectedPiece(nullptr),
+    player1(nullptr), player2(nullptr), activePlayer(nullptr),
+    turnNumber(1), isAnimating(false), gameActive(true)
 {
     connect(board, &Board::cellClicked, this, &GameController::handleCellClicked);
     connect(infoPanel, &InfoPanel::copyLogRequested, this, &GameController::onCopyLogRequested);
@@ -23,6 +28,12 @@ GameController::GameController(Board* board, InfoPanel* panel, QObject* parent)
     playerStates[Player::Player2] = PlayerState();
 }
 
+void GameController::setEnginePaths(const QString& p1Path, const QString& p2Path)
+{
+    m_player1EnginePath = p1Path;
+    m_player2EnginePath = p2Path;
+}
+
 void GameController::initializeGame() {
     AudioManager::instance().initialize();
     AudioManager::instance().playBackgroundMusic();
@@ -31,8 +42,32 @@ void GameController::initializeGame() {
     setupInitialPieces();
     board->updateAllCellDisplays();
     updateBastionProtection();
-    emit turnChanged(currentPlayer, turnNumber);
+
+    if (m_player1EnginePath.isEmpty()) {
+        player1 = new HumanPlayer(Player::Player1, this);
+        qDebug() << "Player 1 (White) is HUMAN";
+    } else {
+        player1 = new EnginePlayer(Player::Player1, m_player1EnginePath, this);
+        qDebug() << "Player 1 (White) is ENGINE:" << m_player1EnginePath;
+    }
+
+    if (m_player2EnginePath.isEmpty()) {
+        player2 = new HumanPlayer(Player::Player2, this);
+        qDebug() << "Player 2 (Black) is HUMAN";
+    } else {
+        player2 = new EnginePlayer(Player::Player2, m_player2EnginePath, this);
+        qDebug() << "Player 2 (Black) is ENGINE:" << m_player2EnginePath;
+    }
+
+    activePlayer = player1;
+
+    connect(player1, &IPlayer::moveReady, this, &GameController::onMoveReceived);
+    connect(player2, &IPlayer::moveReady, this, &GameController::onMoveReceived);
+
+    emit turnChanged(activePlayer->getPlayer(), turnNumber);
     emit statusMessage("GAME START. Player 1, select a piece or click empty cell to recruit.");
+
+    activePlayer->requestMove(generateFullGameStateNotation());
 }
 
 void GameController::setupInitialPieces() {
@@ -104,6 +139,14 @@ void GameController::placePiece(int row, int col, PieceType type, Player player)
 }
 
 void GameController::handleCellClicked(int row, int col) {
+    HumanPlayer* human = dynamic_cast<HumanPlayer*>(activePlayer);
+    if (!human) {
+        if (gameActive) {
+            emit statusMessage("ERROR: Not your turn (AI is thinking).");
+        }
+        return;
+    }
+
     if (!gameActive) {
         emit statusMessage("GAME OVER: No more actions allowed.");
         return;
@@ -133,12 +176,12 @@ void GameController::handleRecruitment(int row, int col) {
     }
 
     Cell* cell = board->getCellData(row, col);
-    if (!cell || !cell->isUnderControl() || cell->getController() != currentPlayer) {
+    if (!cell || !cell->isUnderControl() || cell->getController() != activePlayer->getPlayer()) {
         emit statusMessage("ERROR: Can only recruit on controlled cells.");
         return;
     }
 
-    int resources = getAdjacentResourceSum(row, col, currentPlayer);
+    int resources = getAdjacentResourceSum(row, col, activePlayer->getPlayer());
 
     if (resources < 2) {
         emit statusMessage(QString("ERROR: Not enough resources in adjacent cells. Found %1, minimum is 2.").arg(resources));
@@ -146,27 +189,27 @@ void GameController::handleRecruitment(int row, int col) {
     }
 
     QHash<PieceType, int> currentCosts;
-    currentCosts[PieceType::Footman] = calculateRecruitmentCost(PieceType::Footman, currentPlayer);
-    currentCosts[PieceType::Vanguard] = calculateRecruitmentCost(PieceType::Vanguard, currentPlayer);
-    currentCosts[PieceType::Sentinel] = calculateRecruitmentCost(PieceType::Sentinel, currentPlayer);
-    currentCosts[PieceType::Rindall] = calculateRecruitmentCost(PieceType::Rindall, currentPlayer);
-    currentCosts[PieceType::Worker] = calculateRecruitmentCost(PieceType::Worker, currentPlayer);
+    currentCosts[PieceType::Footman] = calculateRecruitmentCost(PieceType::Footman, activePlayer->getPlayer());
+    currentCosts[PieceType::Vanguard] = calculateRecruitmentCost(PieceType::Vanguard, activePlayer->getPlayer());
+    currentCosts[PieceType::Sentinel] = calculateRecruitmentCost(PieceType::Sentinel, activePlayer->getPlayer());
+    currentCosts[PieceType::Rindall] = calculateRecruitmentCost(PieceType::Rindall, activePlayer->getPlayer());
+    currentCosts[PieceType::Worker] = calculateRecruitmentCost(PieceType::Worker, activePlayer->getPlayer());
 
     RecruitmentDialog dialog(
-        currentPlayer,
+        activePlayer->getPlayer(),
         resources,
         currentCosts,
-        playerStates[currentPlayer].workersReplaced,
-        playerStates[currentPlayer].canRecruitLastLost,
-        playerStates[currentPlayer].lastLostPieceType,
+        playerStates[activePlayer->getPlayer()].workersReplaced,
+        playerStates[activePlayer->getPlayer()].canRecruitLastLost,
+        playerStates[activePlayer->getPlayer()].lastLostPieceType,
         board
         );
 
     if (dialog.exec() == QDialog::Accepted && dialog.wasConfirmed()) {
         PieceType selectedType = dialog.getSelectedPieceType();
 
-        if (canRecruitPiece(selectedType, currentPlayer, row, col, resources)) {
-            recruitPiece(selectedType, currentPlayer, row, col);
+        if (canRecruitPiece(selectedType, activePlayer->getPlayer(), row, col, resources)) {
+            recruitPiece(selectedType, activePlayer->getPlayer(), row, col);
         } else {
             emit statusMessage("ERROR: Cannot recruit this piece at this location (check cost or Worker requirements).");
         }
@@ -259,19 +302,6 @@ void GameController::recruitPiece(PieceType type, Player player, int row, int co
         return;
     }
 
-    int cost = calculateRecruitmentCost(type, player);
-    spendResourcesFromAdjacent(row, col, player, cost);
-
-    placePiece(row, col, type, player);
-
-    AudioManager::instance().playSoundEffect(SoundEffect::RecruitPiece);
-
-    if (type == PieceType::Worker) {
-        playerStates[player].workersReplaced++;
-    }
-
-    playerStates[player].piecesRecruited[type]++;
-
     QString pieceSymbol;
     switch(type) {
     case PieceType::Footman: pieceSymbol = "F"; break;
@@ -282,19 +312,14 @@ void GameController::recruitPiece(PieceType type, Player player, int row, int co
     default: pieceSymbol = "?"; break;
     }
 
-    QString notation = QString("%1@%2%3")
+    QString notation = QString("%1@%2")
                            .arg(pieceSymbol)
-                           .arg(QChar('A' + col))
-                           .arg(12 - row);
+                           .arg(posToString(row, col));
 
-    emit moveMade(notation, currentPlayer);
-    emit statusMessage(QString("RECRUITED: %1 at %2%3 for %4 resources.")
-                           .arg(pieceSymbol)
-                           .arg(QChar('A' + col))
-                           .arg(12 - row)
-                           .arg(cost));
-
-    endTurn();
+    HumanPlayer* human = dynamic_cast<HumanPlayer*>(activePlayer);
+    if (human) {
+        human->processHumanMove(notation);
+    }
 }
 
 
@@ -305,9 +330,8 @@ void GameController::checkAndEvolve(PieceWidget* pieceWidget, int row, int col) 
 
     if (piece->getType() == PieceType::Footman && piece->getKillCount() >= 3) {
         evolvePiece(row, col, PieceType::Champion);
-        emit alertMessage(QString("EVOLUTION! Footman evolved to Champion at %1%2!")
-                              .arg(QChar('A' + col))
-                              .arg(12 - row));
+        emit alertMessage(QString("EVOLUTION! Footman evolved to Champion at %1!")
+                              .arg(posToString(row, col)));
     }
 
     if (piece->getType() == PieceType::Worker) {
@@ -342,9 +366,8 @@ void GameController::checkAndEvolve(PieceWidget* pieceWidget, int row, int col) 
             if (!playerStates[piece->getPlayer()].hasAscendant) {
                 evolvePiece(row, col, PieceType::Ascendant);
                 playerStates[piece->getPlayer()].hasAscendant = true;
-                emit alertMessage(QString("SUPREME EVOLUTION! Worker ascended to Ascendant at %1%2!")
-                                      .arg(QChar('A' + col))
-                                      .arg(12 - row));
+                emit alertMessage(QString("SUPREME EVOLUTION! Worker ascended to Ascendant at %1!")
+                                      .arg(posToString(row, col)));
             }
         }
     }
@@ -375,28 +398,23 @@ void GameController::evolvePiece(int row, int col, PieceType newType) {
 }
 
 void GameController::selectPiece(int row, int col) {
-    if (!gameActive) {
-        emit statusMessage("GAME OVER: No more actions allowed.");
-        return;
-    }
-
     if (isAnimating) {
         emit statusMessage("ERROR: Não é possível selecionar durante animação.");
         return;
     }
 
     if (auto pieceWidget = board->getPieceAt(row, col)) {
-        if (pieceWidget->getPiece()->getPlayer() != currentPlayer) {
+        if (pieceWidget->getPiece()->getPlayer() != activePlayer->getPlayer()) {
             emit statusMessage("ERROR: Not your piece.");
             return;
         }
 
-        if (playerStates[currentPlayer].isInSize) {
+        if (playerStates[activePlayer->getPlayer()].isInSize) {
             PieceType type = pieceWidget->getPiece()->getType();
             if (type == PieceType::Daick) {
                 emit statusMessage("SIZE MODE: Only Daick can move to escape danger.");
             } else {
-                int totalPieces = countPlayerPieces(currentPlayer);
+                int totalPieces = countPlayerPieces(activePlayer->getPlayer());
                 int allowedMoves = (totalPieces + 1) / 2;
 
                 emit statusMessage(QString("SIZE MODE: Limited movement (%1/%2 pieces can move)").arg(allowedMoves).arg(totalPieces));
@@ -515,8 +533,8 @@ bool GameController::executeAttack(PieceWidget* attacker, int attackerRow, int a
         playerStates[loserPlayer].lastLostPieceType = lostType;
         playerStates[loserPlayer].canRecruitLastLost = false;
 
-        isAnimating = true;
         performDestructionAnimation(target, targetRow, targetCol);
+        AudioManager::instance().playSoundEffect(SoundEffect::PieceAttacked);
 
         return true;
     } else {
@@ -532,8 +550,8 @@ bool GameController::executeAttack(PieceWidget* attacker, int attackerRow, int a
         if (damageToCell > 0) {
             consumeCellResources(targetRow, targetCol, damageToCell);
             damageToApply -= damageToCell;
-            emit statusMessage(QString("...Defesa da casa %1%2 absorveu %3 de dano.")
-                                   .arg(QChar('A' + targetCol)).arg(12 - targetRow).arg(damageToCell));
+            emit statusMessage(QString("...Defesa da casa %1 absorveu %2 de dano.")
+                                   .arg(posToString(targetRow, targetCol)).arg(damageToCell));
         }
 
         if (damageToApply > 0 && pieceDef > 0) {
@@ -545,11 +563,12 @@ bool GameController::executeAttack(PieceWidget* attacker, int attackerRow, int a
                                    .arg(newPieceDef));
 
             if (newPieceDef == 0 && target->getPiece()->getType() == PieceType::Bastion) {
-                emit alertMessage(QString("A defesa do Bastion em %1%2 foi quebrada!").arg(QChar('A' + targetCol)).arg(12 - targetRow));
+                emit alertMessage(QString("A defesa do Bastion em %1 foi quebrada!").arg(posToString(targetRow, targetCol)));
             }
         }
 
         board->updateCellDisplay(targetRow, targetCol);
+        AudioManager::instance().playSoundEffect(SoundEffect::PieceAttacked);
         return false;
     }
 }
@@ -607,73 +626,44 @@ void GameController::moveSelectedPieceTo(int row, int col) {
     }
 
     if (isValidMove) {
-        isAnimating = true;
         PieceWidget* targetPiece = board->getPieceAt(row, col);
-        bool isCapture = false;
+        bool isCapture = (targetPiece && targetPiece->getPiece()->getPlayer() != selectedPiece->getPiece()->getPlayer());
 
-        if (targetPiece && targetPiece->getPiece()->getPlayer() != selectedPiece->getPiece()->getPlayer()) {
-            if (isProtectedByBastion(row, col, targetPiece->getPiece()->getPlayer())) {
-                emit statusMessage("ERROR: Target protected by Bastion! Attack the Bastion first.");
-                board->clearHighlights();
-                selectedPiece = nullptr;
-                isAnimating = false;
-                return;
-            }
-
-            bool attackSuccess = executeAttack(selectedPiece, selectedPos.x(), selectedPos.y(), row, col);
-            AudioManager::instance().playSoundEffect(SoundEffect::PieceAttacked);
-
-            if (attackSuccess) {
-                isAnimating = true;
-
-                PieceWidget* attackerCopy = selectedPiece;
-
-                QTimer::singleShot(500, [this, attackerCopy, row, col]() {
-                    QString notation = generateMoveNotation(attackerCopy, row, col, true);
-                    emit moveMade(notation, currentPlayer);
-                    performRetroAnimation(attackerCopy, row, col, true);
-                });
-                return;
-            } else {
-                board->clearHighlights();
-                selectedPiece = nullptr;
-                endTurn();
-                isAnimating = false;
-                return;
-            }
-        } else {
-            emit statusMessage(QString("%1 moves to %2%3.")
-                                   .arg(selectedPiece->getPiece()->getDisplayText())
-                                   .arg(QChar('A' + col))
-                                   .arg(12 - row));
+        if (isCapture && isProtectedByBastion(row, col, targetPiece->getPiece()->getPlayer())) {
+            emit statusMessage("ERROR: Target protected by Bastion! Attack the Bastion first.");
+            board->clearHighlights();
+            selectedPiece = nullptr;
+            return;
         }
 
-        QString notation = generateMoveNotation(selectedPiece, row, col, isCapture);
-        emit moveMade(notation, currentPlayer);
+        QString notation = generateMoveNotation(selectedPiece, selectedPos.x(), selectedPos.y(), row, col, isCapture);
 
-        performRetroAnimation(selectedPiece, row, col, isCapture);
+        HumanPlayer* human = dynamic_cast<HumanPlayer*>(activePlayer);
+        if (human) {
+            human->processHumanMove(notation);
+        }
+
     } else {
         emit statusMessage("ERROR: Invalid move. Selection cleared.");
-        board->clearHighlights();
-        selectedPiece = nullptr;
     }
+
+    board->clearHighlights();
+    selectedPiece = nullptr;
 }
 
-void GameController::performRetroAnimation(PieceWidget* pieceWidget, int toRow, int toCol, bool isCapture) {
+void GameController::performRetroAnimation(PieceWidget* pieceWidget, int fromRow, int fromCol, int toRow, int toCol, bool isCapture) {
     pieceWidget->hide();
 
-    QTimer::singleShot(100, [this, pieceWidget, toRow, toCol]() {
+    QTimer::singleShot(100, [this, pieceWidget, fromRow, fromCol, toRow, toCol]() {
         pieceWidget->show();
 
-        QTimer::singleShot(100, [this, pieceWidget, toRow, toCol]() {
-            pieces.remove(selectedPos);
+        QTimer::singleShot(100, [this, pieceWidget, fromRow, fromCol, toRow, toCol]() {
+            pieces.remove(QPoint(fromRow, fromCol));
             pieces[QPoint(toRow, toCol)] = pieceWidget;
 
-            board->movePiece(selectedPos.x(), selectedPos.y(), toRow, toCol);
+            board->movePiece(fromRow, fromCol, toRow, toCol);
 
-            updateCellControl(toRow, toCol, currentPlayer);
-
-            selectedPos = QPoint(toRow, toCol);
+            updateCellControl(toRow, toCol, activePlayer->getPlayer());
 
             board->clearHighlights();
 
@@ -685,8 +675,8 @@ void GameController::performRetroAnimation(PieceWidget* pieceWidget, int toRow, 
 
                 selectedPiece = nullptr;
                 updateBastionProtection();
-                endTurn();
                 isAnimating = false;
+                endTurn();
             });
         });
     });
@@ -733,7 +723,7 @@ void GameController::updateBastionProtection() {
 void GameController::endTurn() {
     if (!gameActive) return;
 
-    playerStates[currentPlayer].canRecruitLastLost = true;
+    playerStates[activePlayer->getPlayer()].canRecruitLastLost = true;
 
     QString alertStr = checkResourceGeneration();
     QString evolutionStr = checkEvolutionConditions();
@@ -749,25 +739,30 @@ void GameController::endTurn() {
 
     emit alertMessage(alertStr);
 
-    currentPlayer = (currentPlayer == Player::Player1) ? Player::Player2 : Player::Player1;
-    turnNumber++;
+    activePlayer = (activePlayer == player1) ? player2 : player1;
 
-    emit turnChanged(currentPlayer, turnNumber);
+    if (activePlayer == player1) {
+        turnNumber++;
+    }
 
-    QString playerStr = (currentPlayer == Player::Player1) ? "Player 1" : "Player 2";
+    emit turnChanged(activePlayer->getPlayer(), turnNumber);
+
+    QString playerStr = (activePlayer->getPlayer() == Player::Player1) ? "Player 1" : "Player 2";
     if (alertStr.isEmpty()) {
         emit statusMessage(QString("TURN %1: %2's turn. Select a piece or recruit.").arg(turnNumber).arg(playerStr));
     }
 
     board->updateAllCellDisplays();
+
+    activePlayer->requestMove(generateFullGameStateNotation());
 }
 
 QString GameController::checkResourceGeneration() {
-    if (playerStates[currentPlayer].isInSize) {
+    if (playerStates[activePlayer->getPlayer()].isInSize) {
         for (int row = 0; row < 12; ++row) {
             for (int col = 0; col < 12; ++col) {
                 Cell* cell = board->getCellData(row, col);
-                if (cell && cell->hasOwner() && cell->getResourceOwner() == currentPlayer) {
+                if (cell && cell->hasOwner() && cell->getResourceOwner() == activePlayer->getPlayer()) {
                     cell->removeResource();
                 }
             }
@@ -779,13 +774,13 @@ QString GameController::checkResourceGeneration() {
     bool resourceGained = false;
     bool defenseFull = false;
 
-    Player opponent = (currentPlayer == Player::Player1) ? Player::Player2 : Player::Player1;
+    Player opponent = (activePlayer->getPlayer() == Player::Player1) ? Player::Player2 : Player::Player1;
 
     for (int row = 0; row < 12; ++row) {
         for (int col = 0; col < 12; ++col) {
             PieceWidget* piece = board->getPieceAt(row, col);
 
-            if (!piece || piece->getPiece()->getPlayer() != currentPlayer) {
+            if (!piece || piece->getPiece()->getPlayer() != activePlayer->getPlayer()) {
                 continue;
             }
 
@@ -794,13 +789,13 @@ QString GameController::checkResourceGeneration() {
             if (type == PieceType::Worker || type == PieceType::Ascendant) {
                 Cell* cell = board->getCellData(row, col);
 
-                if (cell && cell->isUnderControl() && cell->getController() == currentPlayer) {
-                    if (cell->getResources() >= 5) {
+                if (cell && cell->isUnderControl() && cell->getController() == activePlayer->getPlayer()) {
+                    if (cell->getDefense() >= 5) {
                         defenseFull = true;
                     } else if (isSentinelBlockingCell(row, col, opponent)) {
                         resourceBlocked = true;
                     } else {
-                        cell->addResource(currentPlayer);
+                        cell->addResource(activePlayer->getPlayer());
                         resourceGained = true;
 
                         if (type == PieceType::Worker) {
@@ -830,23 +825,21 @@ QString GameController::checkEvolutionConditions()
     for (int row = 0; row < 12; ++row) {
         for (int col = 0; col < 12; ++col) {
             PieceWidget* piece = board->getPieceAt(row, col);
-            if (piece && piece->getPiece()->getPlayer() == currentPlayer) {
+            if (piece && piece->getPiece()->getPlayer() == activePlayer->getPlayer()) {
                 if (piece->getPiece()->getType() == PieceType::Footman &&
                     piece->getPiece()->getKillCount() >= 3) {
                     if (!alerts.isEmpty()) alerts += "\n";
-                    alerts += QString("EVOLUTION READY: Footman at %1%2 can evolve to Champion (3 kills)!")
-                                  .arg(QChar('A' + col))
-                                  .arg(12 - row);
+                    alerts += QString("EVOLUTION READY: Footman at %1 can evolve to Champion (3 kills)!")
+                                  .arg(posToString(row, col));
                 }
 
                 if (piece->getPiece()->getType() == PieceType::Worker) {
                     if (piece->getPiece()->getTurnsUnderAttack() >= 8 &&
                         piece->getPiece()->getResourcesAccumulated() >= 20 &&
-                        !playerStates[currentPlayer].hasAscendant) {
+                        !playerStates[activePlayer->getPlayer()].hasAscendant) {
                         if (!alerts.isEmpty()) alerts += "\n";
-                        alerts += QString("ASCENSION READY: Worker at %1%2 can become Ascendant!")
-                                      .arg(QChar('A' + col))
-                                      .arg(12 - row);
+                        alerts += QString("ASCENSION READY: Worker at %1 can become Ascendant!")
+                                      .arg(posToString(row, col));
                     }
                 }
             }
@@ -884,14 +877,14 @@ void GameController::updateCellControl(int row, int col, Player player) {
     }
 }
 
-QString GameController::generateMoveNotation(PieceWidget* piece, int toRow, int toCol, bool isCapture) const
+QString GameController::generateMoveNotation(PieceWidget* piece, int fromRow, int fromCol, int toRow, int toCol, bool isCapture) const
 {
     QString pieceSymbol = piece->getPiece()->getSymbol();
+    QString fromStr = posToString(fromRow, fromCol);
     QString captureMark = isCapture ? "x" : "";
-    QString colStr = QChar('A' + toCol);
-    QString rowStr = QString::number(12 - toRow);
+    QString toStr = posToString(toRow, toCol);
 
-    return QString("%1%2%3%4").arg(pieceSymbol).arg(captureMark).arg(colStr).arg(rowStr);
+    return QString("%1%2%3%4").arg(pieceSymbol).arg(fromStr).arg(captureMark).arg(toStr);
 }
 
 void GameController::onCopyLogRequested()
@@ -907,7 +900,7 @@ QString GameController::generateFullGameStateNotation() const
 
     stream << "--- Rindall of Daick: Relatório de Partida ---\n\n";
     stream << "Turno: " << turnNumber << "\n";
-    stream << "Jogador Atual: " << (currentPlayer == Player::Player1 ? "Player 1 (Brancas)" : "Player 2 (Pretas)") << "\n";
+    stream << "Jogador Atual: " << (activePlayer->getPlayer() == Player::Player1 ? "Player 1 (Brancas)" : "Player 2 (Pretas)") << "\n";
     stream << "Status do Jogo: " << (gameActive ? "Em Andamento" : "FINALIZADO") << "\n\n";
 
     stream << "--- Estado do Tabuleiro ---\n";
@@ -927,7 +920,7 @@ QString GameController::generateFullGameStateNotation() const
 
             if (piece || cell->isUnderControl() || cell->getResources() > 0)
             {
-                QString cellPos = QString("%1%2").arg(QChar('A' + c)).arg(12 - r);
+                QString cellPos = posToString(r, c);
                 QString pieceStr = "Vazio";
                 QString atkDefStr = "-";
 
@@ -1128,7 +1121,7 @@ void GameController::handleBastionRehabilitation(int row, int col) {
         return;
     }
 
-    if (bastion->getPiece()->getPlayer() != currentPlayer) {
+    if (bastion->getPiece()->getPlayer() != activePlayer->getPlayer()) {
         emit statusMessage("ERROR: Not your piece.");
         return;
     }
@@ -1138,15 +1131,15 @@ void GameController::handleBastionRehabilitation(int row, int col) {
         return;
     }
 
-    if (!hasAdjacentWorker(row, col, currentPlayer)) {
+    if (!hasAdjacentWorker(row, col, activePlayer->getPlayer())) {
         emit statusMessage("ERROR: Reabilitação falhou. Requer um Worker aliado adjacente.");
         return;
     }
 
     int defenseMissing = bastion->getPiece()->getDefensePower() - bastion->getPiece()->getCurrentDefense();
-    int repairCost = calculateBastionRepairCost(defenseMissing, currentPlayer);
+    int repairCost = calculateBastionRepairCost(defenseMissing, activePlayer->getPlayer());
 
-    int availableResources = getAdjacentResourceSum(row, col, currentPlayer);
+    int availableResources = getAdjacentResourceSum(row, col, activePlayer->getPlayer());
     if (availableResources < repairCost) {
         emit statusMessage(QString("ERROR: Reabilitação falhou. Recursos insuficientes. (Requer: %1, Disponível: %2)")
                                .arg(repairCost)
@@ -1154,24 +1147,12 @@ void GameController::handleBastionRehabilitation(int row, int col) {
         return;
     }
 
-    spendResourcesFromAdjacent(row, col, currentPlayer, repairCost);
+    QString notation = QString("B_REPAIR@%1").arg(posToString(row, col));
 
-    bastion->getPiece()->setCurrentDefense(bastion->getPiece()->getDefensePower());
-
-    playerStates[currentPlayer].bastionRepairs++;
-
-    board->updateCellDisplay(row, col);
-
-    QString notation = QString("B_REPAIR@%1%2")
-                           .arg(QChar('A' + col))
-                           .arg(12 - row);
-
-    emit moveMade(notation, currentPlayer);
-    emit statusMessage(QString("AÇÃO: Bastion reabilitado por %1 recursos! (Inflação de reparo agora: %2)")
-                           .arg(repairCost)
-                           .arg(playerStates[currentPlayer].bastionRepairs));
-
-    endTurn();
+    HumanPlayer* human = dynamic_cast<HumanPlayer*>(activePlayer);
+    if (human) {
+        human->processHumanMove(notation);
+    }
 }
 
 bool GameController::hasAdjacentWorker(int row, int col, Player player) const {
@@ -1225,16 +1206,16 @@ void GameController::checkVictoryConditions() {
     }
 
 
-    Player opponent = (currentPlayer == Player::Player1) ? Player::Player2 : Player::Player1;
+    Player opponent = (activePlayer->getPlayer() == Player::Player1) ? Player::Player2 : Player::Player1;
 
-    checkSizeCondition(currentPlayer);
+    checkSizeCondition(activePlayer->getPlayer());
     checkSizeCondition(opponent);
 
     if (playerStates[opponent].isInSize) {
         playerStates[opponent].turnsInSize++;
 
         if (playerStates[opponent].turnsInSize >= 5) {
-            endGame(currentPlayer, "Size's Victory");
+            endGame(activePlayer->getPlayer(), "Size's Victory");
             return;
         } else {
             emit alertMessage(QString("WARNING: %1 is in SIZE state! (%2/5 turns)")
@@ -1243,9 +1224,9 @@ void GameController::checkVictoryConditions() {
         }
     }
 
-    int currentResources = getTotalPlayerResources(currentPlayer);
+    int currentResources = getTotalPlayerResources(activePlayer->getPlayer());
 
-    playerStates[currentPlayer].lastTurnResourceCount = currentResources;
+    playerStates[activePlayer->getPlayer()].lastTurnResourceCount = currentResources;
 }
 
 bool GameController::checkDaicksFall() {
@@ -1464,4 +1445,199 @@ void GameController::displayVictoryScreen(Player winner, const QString& victoryT
     QTimer::singleShot(1200, [this]() {
         board->updateAllCellDisplays();
     });
+}
+
+void GameController::onMoveReceived(const QString& moveNotation)
+{
+    if (!gameActive || isAnimating) {
+        return;
+    }
+
+    qDebug() << "GameController: Received move" << moveNotation << "from" << (activePlayer->getPlayer() == Player::Player1 ? "P1" : "P2");
+
+    bool parseSuccess = parseAndExecuteMove(moveNotation);
+
+    if (parseSuccess) {
+        emit moveMade(moveNotation, activePlayer->getPlayer());
+    } else {
+        emit statusMessage(QString("ERROR: Invalid move received: %1").arg(moveNotation));
+        qWarning() << "Invalid move received:" << moveNotation;
+        activePlayer->requestMove(generateFullGameStateNotation());
+    }
+}
+
+bool GameController::parseAndExecuteMove(const QString& notation)
+{
+    if (notation.contains('@')) {
+        QRegularExpression re("([A-Z])@([A-L][0-9]{1,2})");
+        QRegularExpressionMatch match = re.match(notation);
+
+        if (notation.startsWith("B_REPAIR@")) {
+            QPoint pos = stringToPos(notation.mid(9));
+            return executeBastionRepair(pos.x(), pos.y());
+        }
+        else if (match.hasMatch()) {
+            QString pieceSymbol = match.captured(1);
+            QPoint pos = stringToPos(match.captured(2));
+
+            PieceType type;
+            if (pieceSymbol == "F") type = PieceType::Footman;
+            else if (pieceSymbol == "V") type = PieceType::Vanguard;
+            else if (pieceSymbol == "S") type = PieceType::Sentinel;
+            else if (pieceSymbol == "R") type = PieceType::Rindall;
+            else if (pieceSymbol == "W") type = PieceType::Worker;
+            else return false;
+
+            return executeRecruitment(type, pos.x(), pos.y());
+        }
+    }
+    else {
+        QRegularExpression re("([A-Z])([A-L][0-9]{1,2})(x?)([A-L][0-9]{1,2})");
+        QRegularExpressionMatch match = re.match(notation);
+
+        if (match.hasMatch()) {
+            QString pieceSymbol = match.captured(1);
+            QPoint fromPos = stringToPos(match.captured(2));
+            bool isCapture = !match.captured(3).isEmpty();
+            QPoint toPos = stringToPos(match.captured(4));
+
+            PieceWidget* piece = board->getPieceAt(fromPos.x(), fromPos.y());
+
+            if (!piece || piece->getPiece()->getPlayer() != activePlayer->getPlayer() || piece->getPiece()->getSymbol() != pieceSymbol) {
+                qWarning() << "Move parse error: Piece mismatch" << notation;
+                return false;
+            }
+
+            auto moves = piece->getPiece()->getPossibleMoves(fromPos.x(), fromPos.y(), board);
+            bool isValidMove = false;
+            for (const auto& move : std::as_const(moves)) {
+                if (move.first == toPos.x() && move.second == toPos.y()) {
+                    isValidMove = true;
+                    break;
+                }
+            }
+
+            if (!isValidMove) {
+                qWarning() << "Move parse error: Not a valid move" << notation;
+                return false;
+            }
+
+            return executeMove(piece, fromPos.x(), fromPos.y(), toPos.x(), toPos.y(), isCapture);
+        }
+    }
+
+    qWarning() << "Move parse error: Unrecognized format" << notation;
+    return false;
+}
+
+bool GameController::executeMove(PieceWidget* piece, int fromRow, int fromCol, int toRow, int toCol, bool isCapture)
+{
+    isAnimating = true;
+
+    if (isCapture) {
+        bool attackSuccess = executeAttack(piece, fromRow, fromCol, toRow, toCol);
+
+        if (attackSuccess) {
+            QTimer::singleShot(500, [this, piece, fromRow, fromCol, toRow, toCol, isCapture]() {
+                performRetroAnimation(piece, fromRow, fromCol, toRow, toCol, isCapture);
+            });
+            return true;
+        } else {
+            isAnimating = false;
+            endTurn();
+            return true;
+        }
+    } else {
+        performRetroAnimation(piece, fromRow, fromCol, toRow, toCol, isCapture);
+        return true;
+    }
+}
+
+bool GameController::executeRecruitment(PieceType type, int row, int col)
+{
+    Player player = activePlayer->getPlayer();
+    int availableResources = getAdjacentResourceSum(row, col, player);
+
+    if (!canRecruitPiece(type, player, row, col, availableResources)) {
+        qWarning() << "executeRecruitment: canRecruitPiece check failed.";
+        return false;
+    }
+
+    int cost = calculateRecruitmentCost(type, player);
+    spendResourcesFromAdjacent(row, col, player, cost);
+
+    placePiece(row, col, type, player);
+
+    AudioManager::instance().playSoundEffect(SoundEffect::RecruitPiece);
+
+    if (type == PieceType::Worker) {
+        playerStates[player].workersReplaced++;
+    }
+
+    playerStates[player].piecesRecruited[type]++;
+
+    emit statusMessage(QString("RECRUITED: %1 at %2 for %3 resources.")
+                           .arg(posToString(row, col))
+                           .arg(cost));
+
+    endTurn();
+    return true;
+}
+
+bool GameController::executeBastionRepair(int row, int col)
+{
+    Player player = activePlayer->getPlayer();
+    PieceWidget* bastion = board->getPieceAt(row, col);
+
+    if (!bastion || bastion->getPiece()->getType() != PieceType::Bastion || bastion->getPiece()->getPlayer() != player) {
+        qWarning() << "executeBastionRepair: Not a valid bastion.";
+        return false;
+    }
+
+    if (bastion->getPiece()->getCurrentDefense() >= bastion->getPiece()->getDefensePower()) {
+        emit statusMessage("BASTION: Already at full defense. No rehabilitation needed.");
+        return false;
+    }
+
+    if (!hasAdjacentWorker(row, col, player)) {
+        emit statusMessage("ERROR: Reabilitação falhou. Requer um Worker aliado adjacente.");
+        return false;
+    }
+
+    int defenseMissing = bastion->getPiece()->getDefensePower() - bastion->getPiece()->getCurrentDefense();
+    int repairCost = calculateBastionRepairCost(defenseMissing, player);
+
+    int availableResources = getAdjacentResourceSum(row, col, player);
+    if (availableResources < repairCost) {
+        emit statusMessage(QString("ERROR: Reabilitação falhou. Recursos insuficientes. (Requer: %1, Disponível: %2)")
+                               .arg(repairCost)
+                               .arg(availableResources));
+        return false;
+    }
+
+    spendResourcesFromAdjacent(row, col, player, repairCost);
+    bastion->getPiece()->setCurrentDefense(bastion->getPiece()->getDefensePower());
+    playerStates[player].bastionRepairs++;
+
+    board->updateCellDisplay(row, col);
+
+    emit statusMessage(QString("AÇÃO: Bastion reabilitado por %1 recursos! (Inflação de reparo agora: %2)")
+                           .arg(repairCost)
+                           .arg(playerStates[player].bastionRepairs));
+
+    endTurn();
+    return true;
+}
+
+QPoint GameController::stringToPos(QString pos) const
+{
+    if (pos.isEmpty()) return QPoint(-1, -1);
+    int col = pos[0].toUpper().toLatin1() - 'A';
+    int row = 12 - pos.mid(1).toInt();
+    return QPoint(row, col);
+}
+
+QString GameController::posToString(int row, int col) const
+{
+    return QString("%1%2").arg(QChar('A' + col)).arg(12 - row);
 }
