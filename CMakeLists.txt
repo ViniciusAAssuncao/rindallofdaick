@@ -57,6 +57,10 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         engineplayer.cpp
         enginesettingsdialog.h
         enginesettingsdialog.cpp
+        tacticalarrow.h
+        tacticalarrow.cpp
+        tacticalmanager.h
+        tacticalmanager.cpp
 
 
 

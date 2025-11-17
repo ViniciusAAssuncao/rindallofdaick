@@ -25,6 +25,17 @@ GameController::GameController(Board* board, InfoPanel* panel, QObject* parent)
     connect(infoPanel, &InfoPanel::downloadLogRequestedToDesktop, this, &GameController::onDownloadLogToDesktopRequested);
     connect(this, &GameController::sendLogToClipboard, infoPanel, &InfoPanel::copyToClipboard);
 
+    tacticalManager = new TacticalManager(board, this);
+    tacticalManager->setGameController(this);
+    board->setTacticalManager(tacticalManager);
+    connect(board, &Board::middleButtonClicked,
+            tacticalManager, &TacticalManager::handleMiddleClick);
+    connect(tacticalManager, &TacticalManager::sendTacticalMove,
+            this, &GameController::onMoveReceived);
+    connect(tacticalManager, &TacticalManager::statusMessage,
+            this, &GameController::statusMessage);
+    connect(board, &Board::rightClickOnEmptyCell, this, &GameController::handleRightClickOnEmptyCell);
+
     playerStates[Player::Player1] = PlayerState();
     playerStates[Player::Player2] = PlayerState();
 }
@@ -782,6 +793,8 @@ void GameController::endTurn() {
 
     board->updateAllCellDisplays();
 
+    tacticalManager->checkAndExecutePendingMoves(activePlayer->getPlayer());
+
     activePlayer->requestMove(generateFullGameStateNotation());
 }
 
@@ -1524,7 +1537,7 @@ void GameController::displayVictoryScreen(Player winner, const QString& victoryT
     QString winnerName = (winner == Player::Player1) ? "PLAYER 1 (BRANCAS)" : "PLAYER 2 (PRETAS)";
 
     QString victoryMessage = QString("═══════════════════════════════\n"
-                                     "     VITÓRIA!\n"
+                                     "      VITÓRIA!\n"
                                      "═══════════════════════════════\n\n"
                                      "%1\n"
                                      "VENCEU POR:\n"
@@ -1779,7 +1792,7 @@ bool GameController::executeFootmanConversion(int row, int col)
     }
 
     if (!hasAdjacentSentinel(row, col, player)) {
-        qWarning() << "executeFootmanConversion: No adjacent Sentinel.";
+        qWarning() << "executeFootFConversion: No adjacent Sentinel.";
         return false;
     }
 
@@ -1948,4 +1961,13 @@ void GameController::handleVanguardBonusMove(int toRow, int toCol)
         "ERROR: Invalid bonus move. Select an adjacent square, a jump square, "
         "or the Vanguard to skip."
         );
+}
+
+void GameController::handleRightClickOnEmptyCell(int row, int col)
+{
+    Q_UNUSED(row);
+    Q_UNUSED(col);
+
+    tacticalManager->clearAllArrows();
+    emit statusMessage("Todas as setas táticas foram removidas.");
 }

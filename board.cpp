@@ -1,9 +1,12 @@
 #include "board.h"
 #include "audiomanager.h"
+#include "tacticalmanager.h"
 #include <QFont>
 #include <QTimer>
+#include <qcoreevent.h>
+#include <QMouseEvent>
 
-Board::Board(QWidget *parent) : QWidget(parent)
+Board::Board(QWidget *parent) : QWidget(parent), tacticalManager(nullptr)
 {
     setupGrid();
 }
@@ -45,6 +48,8 @@ void Board::setupGrid()
             layout->addWidget(cell, row + 1, col + 1);
             cells[row][col] = cell;
             connect(cell, &QPushButton::clicked, this, &Board::onCellClicked);
+            cell->installEventFilter(this);
+
 
             if (row <= 1) {
                 cellData[row][col].setController(Player::Player2);
@@ -77,6 +82,7 @@ void Board::addPieceToCell(int row, int col, PieceWidget* pieceWidget) {
         layout->addWidget(pieceWidget, row + 1, col + 1);
         pieceWidget->show();
         pieceMap[{row, col}] = pieceWidget;
+        pieceWidget->installEventFilter(this);
         updateCellTooltip(row, col);
     }
 }
@@ -84,6 +90,7 @@ void Board::addPieceToCell(int row, int col, PieceWidget* pieceWidget) {
 void Board::removePieceFromCell(int row, int col) {
     if (auto piece = getPieceAt(row, col)) {
         piece->setToolTip("");
+        piece->removeEventFilter(this);
         layout->removeWidget(piece);
         pieceMap.remove({row, col});
         piece->deleteLater();
@@ -98,10 +105,12 @@ void Board::movePiece(int fromRow, int fromCol, int toRow, int toCol) {
     if (pieceToMove) {
         layout->removeWidget(pieceToMove);
         pieceMap.remove({fromRow, fromCol});
+        pieceToMove->removeEventFilter(this);
 
         layout->addWidget(pieceToMove, toRow + 1, toCol + 1);
         pieceToMove->show();
         pieceMap[{toRow, toCol}] = pieceToMove;
+        pieceToMove->installEventFilter(this);
 
         updateCellTooltip(fromRow, fromCol);
         updateCellTooltip(toRow, toCol);
@@ -305,5 +314,69 @@ void Board::updateAllCellDisplays() {
         for (int col = 0; col < 12; ++col) {
             updateCellDisplay(row, col);
         }
+    }
+}
+
+void Board::setTacticalManager(TacticalManager* manager)
+{
+    tacticalManager = manager;
+}
+
+bool Board::eventFilter(QObject *obj, QEvent *event)
+{
+    if (event->type() == QEvent::MouseButtonPress) {
+        QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() == Qt::MiddleButton) {
+
+            QPushButton *button = qobject_cast<QPushButton*>(obj);
+            if (button) {
+                for (int row = 0; row < 12; ++row) {
+                    for (int col = 0; col < 12; ++col) {
+                        if (cells[row][col] == button) {
+                            emit middleButtonClicked(row, col);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            PieceWidget *piece = qobject_cast<PieceWidget*>(obj);
+            if (piece) {
+                for (auto it = pieceMap.constBegin(); it != pieceMap.constEnd(); ++it) {
+                    if (it.value() == piece) {
+                        emit middleButtonClicked(it.key().first, it.key().second);
+                        return true;
+                    }
+                }
+            }
+        }
+            else if (mouseEvent->button() == Qt::RightButton) {
+                QPushButton *button = qobject_cast<QPushButton*>(obj);
+                if (button) {
+                    for (int row = 0; row < 12; ++row) {
+                        for (int col = 0; col < 12; ++col) {
+                            if (cells[row][col] == button) {
+                                if (!getPieceAt(row, col)) {
+                                    emit rightClickOnEmptyCell(row, col);
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return QWidget::eventFilter(obj, event);
+    }
+
+void Board::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_L && event->modifiers() & Qt::ControlModifier) {
+        if (tacticalManager) {
+            tacticalManager->clearAllArrows();
+        }
+        event->accept();
+    } else {
+        QWidget::keyPressEvent(event);
     }
 }
