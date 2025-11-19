@@ -10,6 +10,7 @@
 #include "abstractplayer.h"
 #include "humanplayer.h"
 #include "engineplayer.h"
+#include "tacticalmanager.h"
 
 class Board;
 
@@ -34,15 +35,21 @@ struct PlayerState {
     int lastTurnResourceCount = 0;
     bool footmanToWorkerUsed = false;
 
-    PlayerState() : workersReplaced(0), hasAscendant(false),
-        lastLostPieceType(PieceType::Footman), canRecruitLastLost(true),
-        bastionRepairs(0), footmanToWorkerUsed(false) {}
+    PlayerState()
+        : workersReplaced(0),
+        hasAscendant(false),
+        lastLostPieceType(PieceType::Footman),
+        canRecruitLastLost(true),
+        bastionRepairs(0),
+        footmanToWorkerUsed(false)
+    {
+    }
 };
-
 
 class GameController : public QObject
 {
     Q_OBJECT
+
 public:
     explicit GameController(Board* board, InfoPanel* panel, QObject* parent = nullptr);
     void initializeGame();
@@ -59,11 +66,11 @@ signals:
     void moveMade(const QString& moveNotation, Player player);
     void sendLogToClipboard(const QString& text);
 
-private slots:
+public slots:
     void handleCellClicked(int row, int col);
     void handleRightClickAction(int row, int col);
     void onMoveReceived(const QString& moveNotation);
-
+    void handleRightClickOnEmptyCell(int row, int col);
 private:
     void handleRecruitment(int row, int col);
     int calculateRecruitmentCost(PieceType type, Player player);
@@ -72,6 +79,8 @@ private:
     void checkAndEvolve(PieceWidget* pieceWidget, int row, int col);
     void evolvePiece(int row, int col, PieceType newType);
     QString checkEvolutionConditions();
+
+    TacticalManager* tacticalManager;
 
     bool vanguardBonusMovePending;
     PieceWidget* vanguardBonusPiece;
@@ -122,6 +131,9 @@ private:
     int getTotalPlayerResources(Player player) const;
     void endGame(Player winner, const QString& victoryType);
     void displayVictoryScreen(Player winner, const QString& victoryType);
+
+    bool isInDaicksFall(Player player);
+    bool isDaicksFall(Player player);
 
     bool parseAndExecuteMove(const QString& notation);
     bool executeMove(PieceWidget* piece, int fromRow, int fromCol, int toRow, int toCol, bool isCapture);

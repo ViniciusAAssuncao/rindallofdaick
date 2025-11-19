@@ -4,9 +4,12 @@
 #include <QGridLayout>
 #include <QPushButton>
 #include <QLabel>
+#include <QMouseEvent>
 #include "piecewidget.h"
 #include "piece.h"
 #include "cell.h"
+
+class TacticalManager;
 
 class Board : public QWidget
 {
@@ -25,8 +28,13 @@ public:
     void updateCellDisplay(int row, int col);
     void updateAllCellDisplays();
 
+    void setTacticalManager(TacticalManager* manager);
+    void setInternalPiece(int row, int col, PieceWidget* piece);
+
 signals:
     void cellClicked(int row, int col);
+    void middleButtonClicked(int row, int col);
+    void rightClickOnEmptyCell(int row, int col);
 private slots:
     void onCellClicked();
 private:
@@ -39,5 +47,10 @@ private:
     QPushButton* cells[12][12];
     Cell cellData[12][12];
     QHash<QPair<int, int>, PieceWidget*> pieceMap;
+    TacticalManager* tacticalManager;
+protected:
+    bool eventFilter(QObject *obj, QEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
+
 };
 #endif

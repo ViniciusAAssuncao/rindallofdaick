@@ -1,9 +1,12 @@
 #include "board.h"
 #include "audiomanager.h"
+#include "tacticalmanager.h"
 #include <QFont>
 #include <QTimer>
+#include <qcoreevent.h>
+#include <QMouseEvent>
 
-Board::Board(QWidget *parent) : QWidget(parent)
+Board::Board(QWidget *parent) : QWidget(parent), tacticalManager(nullptr)
 {
     setupGrid();
 }
@@ -45,6 +48,8 @@ void Board::setupGrid()
             layout->addWidget(cell, row + 1, col + 1);
             cells[row][col] = cell;
             connect(cell, &QPushButton::clicked, this, &Board::onCellClicked);
+            cell->installEventFilter(this);
+
 
             if (row <= 1) {
                 cellData[row][col].setController(Player::Player2);
@@ -77,6 +82,7 @@ void Board::addPieceToCell(int row, int col, PieceWidget* pieceWidget) {
         layout->addWidget(pieceWidget, row + 1, col + 1);
         pieceWidget->show();
         pieceMap[{row, col}] = pieceWidget;
+        pieceWidget->installEventFilter(this);
         updateCellTooltip(row, col);
     }
 }
@@ -84,6 +90,7 @@ void Board::addPieceToCell(int row, int col, PieceWidget* pieceWidget) {
 void Board::removePieceFromCell(int row, int col) {
     if (auto piece = getPieceAt(row, col)) {
         piece->setToolTip("");
+        piece->removeEventFilter(this);
         layout->removeWidget(piece);
         pieceMap.remove({row, col});
         piece->deleteLater();
@@ -98,10 +105,12 @@ void Board::movePiece(int fromRow, int fromCol, int toRow, int toCol) {
     if (pieceToMove) {
         layout->removeWidget(pieceToMove);
         pieceMap.remove({fromRow, fromCol});
+        pieceToMove->removeEventFilter(this);
 
         layout->addWidget(pieceToMove, toRow + 1, toCol + 1);
         pieceToMove->show();
         pieceMap[{toRow, toCol}] = pieceToMove;
+        pieceToMove->installEventFilter(this);
 
         updateCellTooltip(fromRow, fromCol);
         updateCellTooltip(toRow, toCol);
@@ -159,9 +168,7 @@ QString Board::generateCellTooltip(int row, int col) const {
     }
 
     PieceWidget* currentPiece = getPieceAt(row, col);
-    Player viewerPlayer = currentPiece ? currentPiece->getPiece()->getPlayer() : Player::Player1;
-
-    int cellDef = cellData[row][col].getDefense(viewerPlayer);
+    int resourceDef = cellData[row][col].getResources();
     int bastionAuraDef = cellData[row][col].getBastionDefense();
 
     QString pieceInfo = "Nenhuma";
@@ -179,7 +186,7 @@ QString Board::generateCellTooltip(int row, int col) const {
                          .arg(pieceDef);
     }
 
-    int totalDef = cellDef + pieceDef + bastionAuraDef;
+    int totalDef = resourceDef + pieceDef + bastionAuraDef;
 
     QString resourceInfo;
     if (cellData[row][col].hasOwner()) {
@@ -192,9 +199,13 @@ QString Board::generateCellTooltip(int row, int col) const {
     QString defenseInfo = QString("Defesa Total: %1").arg(totalDef);
 
     QString defDetails;
-    if (cellDef > 0) defDetails += QString("Casa:%1").arg(cellDef);
-    if (pieceDef > 0) defDetails += (defDetails.isEmpty() ? "" : " + ") + QString("Peça:%1").arg(pieceDef);
+
+    if (resourceDef > 0) defDetails += QString("Casa:%1").arg(resourceDef);
+
     if (bastionAuraDef > 0) defDetails += (defDetails.isEmpty() ? "" : " + ") + QString("Aura:%1").arg(bastionAuraDef);
+
+    if (pieceDef > 0) defDetails += (defDetails.isEmpty() ? "" : " + ") + QString("Peça:%1").arg(pieceDef);
+
     if (!defDetails.isEmpty()) defenseInfo += " (" + defDetails + ")";
 
     QString blockingReasons;
@@ -261,7 +272,6 @@ QString Board::generateCellTooltip(int row, int col) const {
         .arg(blockingReasons.isEmpty() ? "Sem bloqueios" : "Bloqueios:\n" + blockingReasons);
 }
 
-
 void Board::updateCellTooltip(int row, int col) {
     if (row >= 0 && row < 12 && col >= 0 && col < 12) {
         QString tooltip = generateCellTooltip(row, col);
@@ -306,4 +316,79 @@ void Board::updateAllCellDisplays() {
             updateCellDisplay(row, col);
         }
     }
+}
+
+void Board::setTacticalManager(TacticalManager* manager)
+{
+    tacticalManager = manager;
+}
+
+bool Board::eventFilter(QObject *obj, QEvent *event)
+{
+    if (event->type() == QEvent::MouseButtonPress) {
+        QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event);
+        if (mouseEvent->button() == Qt::MiddleButton) {
+
+            QPushButton *button = qobject_cast<QPushButton*>(obj);
+            if (button) {
+                for (int row = 0; row < 12; ++row) {
+                    for (int col = 0; col < 12; ++col) {
+                        if (cells[row][col] == button) {
+                            emit middleButtonClicked(row, col);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            PieceWidget *piece = qobject_cast<PieceWidget*>(obj);
+            if (piece) {
+                for (auto it = pieceMap.constBegin(); it != pieceMap.constEnd(); ++it) {
+                    if (it.value() == piece) {
+                        emit middleButtonClicked(it.key().first, it.key().second);
+                        return true;
+                    }
+                }
+            }
+        }
+            else if (mouseEvent->button() == Qt::RightButton) {
+                QPushButton *button = qobject_cast<QPushButton*>(obj);
+                if (button) {
+                    for (int row = 0; row < 12; ++row) {
+                        for (int col = 0; col < 12; ++col) {
+                            if (cells[row][col] == button) {
+                                if (!getPieceAt(row, col)) {
+                                    emit rightClickOnEmptyCell(row, col);
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return QWidget::eventFilter(obj, event);
+    }
+
+void Board::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_L && event->modifiers() & Qt::ControlModifier) {
+        if (tacticalManager) {
+            tacticalManager->clearAllArrows();
+        }
+        event->accept();
+    } else {
+        QWidget::keyPressEvent(event);
+    }
+}
+
+void Board::setInternalPiece(int row, int col, PieceWidget* piece)
+{
+    if (piece) {
+        pieceMap[{row, col}] = piece;
+        piece->installEventFilter(this);
+    } else {
+        pieceMap.remove({row, col});
+    }
+    updateCellTooltip(row, col);
 }

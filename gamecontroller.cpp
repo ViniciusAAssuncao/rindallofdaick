@@ -25,6 +25,17 @@ GameController::GameController(Board* board, InfoPanel* panel, QObject* parent)
     connect(infoPanel, &InfoPanel::downloadLogRequestedToDesktop, this, &GameController::onDownloadLogToDesktopRequested);
     connect(this, &GameController::sendLogToClipboard, infoPanel, &InfoPanel::copyToClipboard);
 
+    tacticalManager = new TacticalManager(board, this);
+    tacticalManager->setGameController(this);
+    board->setTacticalManager(tacticalManager);
+    connect(board, &Board::middleButtonClicked,
+            tacticalManager, &TacticalManager::handleMiddleClick);
+    connect(tacticalManager, &TacticalManager::sendTacticalMove,
+            this, &GameController::onMoveReceived);
+    connect(tacticalManager, &TacticalManager::statusMessage,
+            this, &GameController::statusMessage);
+    connect(board, &Board::rightClickOnEmptyCell, this, &GameController::handleRightClickOnEmptyCell);
+
     playerStates[Player::Player1] = PlayerState();
     playerStates[Player::Player2] = PlayerState();
 }
@@ -640,6 +651,13 @@ void GameController::moveSelectedPieceTo(int row, int col) {
         PieceWidget* targetPiece = board->getPieceAt(row, col);
         bool isCapture = (targetPiece && targetPiece->getPiece()->getPlayer() != selectedPiece->getPiece()->getPlayer());
 
+        if (isCapture && selectedPiece->getPiece()->getType() == PieceType::Daick) {
+            emit statusMessage("ERROR: O Daick não pode atacar! Peça inerte.");
+            board->clearHighlights();
+            selectedPiece = nullptr;
+            return;
+        }
+
         if (isCapture && isProtectedByBastion(row, col, targetPiece->getPiece()->getPlayer())) {
             emit statusMessage("ERROR: Target protected by Bastion! Attack the Bastion first.");
             board->clearHighlights();
@@ -775,12 +793,19 @@ void GameController::endTurn() {
 
     emit turnChanged(activePlayer->getPlayer(), turnNumber);
 
+    if (isDaicksFall(activePlayer->getPlayer())) {
+        Player opponent = (activePlayer->getPlayer() == Player::Player1) ? Player::Player2 : Player::Player1;
+        endGame(opponent, "Daick's Fall - Não é mais possível salvar o Daick.");
+    }
+
     QString playerStr = (activePlayer->getPlayer() == Player::Player1) ? "Player 1" : "Player 2";
     if (alertStr.isEmpty()) {
         emit statusMessage(QString("TURN %1: %2's turn. Select a piece or recruit.").arg(turnNumber).arg(playerStr));
     }
 
     board->updateAllCellDisplays();
+
+    tacticalManager->checkAndExecutePendingMoves(activePlayer->getPlayer());
 
     activePlayer->requestMove(generateFullGameStateNotation());
 }
@@ -1009,7 +1034,7 @@ QString GameController::generateFullGameStateNotation() const
             case PieceType::Bastion: pieceName = "Bastion"; break;
             default: pieceName = "Unknown"; break;
             }
-            stream << QString("     * %1: %2\n").arg(pieceName).arg(it.value());
+            stream << QString("      * %1: %2\n").arg(pieceName).arg(it.value());
         }
     }
 
@@ -1524,7 +1549,7 @@ void GameController::displayVictoryScreen(Player winner, const QString& victoryT
     QString winnerName = (winner == Player::Player1) ? "PLAYER 1 (BRANCAS)" : "PLAYER 2 (PRETAS)";
 
     QString victoryMessage = QString("═══════════════════════════════\n"
-                                     "     VITÓRIA!\n"
+                                     "      VITÓRIA!\n"
                                      "═══════════════════════════════\n\n"
                                      "%1\n"
                                      "VENCEU POR:\n"
@@ -1560,18 +1585,128 @@ void GameController::displayVictoryScreen(Player winner, const QString& victoryT
     });
 }
 
+bool GameController::isInDaicksFall(Player player)
+{
+    PieceWidget* daick = nullptr;
+    int daickRow = -1;
+    int daickCol = -1;
+
+    for (auto it = pieces.constBegin(); it != pieces.constEnd(); ++it) {
+        if (it.value()->getPiece()->getType() == PieceType::Daick &&
+            it.value()->getPiece()->getPlayer() == player) {
+            daick = it.value();
+            daickRow = it.key().x();
+            daickCol = it.key().y();
+            break;
+        }
+    }
+
+    if (!daick) return true;
+
+    Player opponent = (player == Player::Player1) ? Player::Player2 : Player::Player1;
+
+    for (auto it = pieces.constBegin(); it != pieces.constEnd(); ++it) {
+        PieceWidget* enemy = it.value();
+        if (enemy->getPiece()->getPlayer() == opponent) {
+            int enemyRow = it.key().x();
+            int enemyCol = it.key().y();
+
+            QList<QPair<int, int>> moves = enemy->getPiece()->getPossibleMoves(enemyRow, enemyCol, board);
+            for (const auto& move : moves) {
+                if (move.first == daickRow && move.second == daickCol) {
+                    if (canAttack(enemy, daickRow, daickCol)) {
+                        int totalDefense = calculateTotalDefense(daickRow, daickCol);
+                        if (enemy->getPiece()->getAttackPower() > totalDefense) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool GameController::isDaicksFall(Player player)
+{
+    if (!isInDaicksFall(player)) return false;
+
+    QList<PieceWidget*> playerPieces;
+    for (auto it = pieces.constBegin(); it != pieces.constEnd(); ++it) {
+        if (it.value()->getPiece()->getPlayer() == player) {
+            playerPieces.append(it.value());
+        }
+    }
+
+    for (PieceWidget* piece : playerPieces) {
+        QPoint currentPos = pieces.key(piece);
+        int currentRow = currentPos.x();
+        int currentCol = currentPos.y();
+
+        QList<QPair<int, int>> moves = piece->getPiece()->getPossibleMoves(currentRow, currentCol, board);
+
+        for (const auto& move : moves) {
+            int targetRow = move.first;
+            int targetCol = move.second;
+
+            PieceWidget* targetPiece = board->getPieceAt(targetRow, targetCol);
+            bool isCapture = (targetPiece != nullptr);
+
+            if (isCapture && targetPiece->getPiece()->getPlayer() == player) continue;
+            if (isCapture && isProtectedByBastion(targetRow, targetCol, targetPiece->getPiece()->getPlayer())) continue;
+
+
+            board->setInternalPiece(currentRow, currentCol, nullptr);
+            pieces.remove(currentPos);
+
+            PieceWidget* originalTarget = nullptr;
+            if (isCapture) {
+                originalTarget = targetPiece;
+                board->setInternalPiece(targetRow, targetCol, piece);
+                pieces.remove(QPoint(targetRow, targetCol));
+                pieces.insert(QPoint(targetRow, targetCol), piece);
+            } else {
+                board->setInternalPiece(targetRow, targetCol, piece);
+                pieces.insert(QPoint(targetRow, targetCol), piece);
+            }
+
+            bool stillInCheck = isInDaicksFall(player);
+
+            pieces.remove(QPoint(targetRow, targetCol));
+            if (isCapture) {
+                board->setInternalPiece(targetRow, targetCol, originalTarget);
+                pieces.insert(QPoint(targetRow, targetCol), originalTarget);
+            } else {
+                board->setInternalPiece(targetRow, targetCol, nullptr);
+            }
+
+            board->setInternalPiece(currentRow, currentCol, piece);
+            pieces.insert(currentPos, piece);
+
+            if (!stillInCheck) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+
 void GameController::onMoveReceived(const QString& moveNotation)
 {
     if (!gameActive || isAnimating) {
         return;
     }
 
-    qDebug() << "GameController: Received move" << moveNotation << "from" << (activePlayer->getPlayer() == Player::Player1 ? "P1" : "P2");
+    Player playerWhoMoved = activePlayer->getPlayer();
+    qDebug() << "GameController: Received move" << moveNotation << "from"
+             << (playerWhoMoved == Player::Player1 ? "P1" : "P2");
 
     bool parseSuccess = parseAndExecuteMove(moveNotation);
 
     if (parseSuccess) {
-        emit moveMade(moveNotation, activePlayer->getPlayer());
+        emit moveMade(moveNotation, playerWhoMoved);
     } else {
         emit statusMessage(QString("ERROR: Invalid move received: %1").arg(moveNotation));
         qWarning() << "Invalid move received:" << moveNotation;
@@ -1779,7 +1914,7 @@ bool GameController::executeFootmanConversion(int row, int col)
     }
 
     if (!hasAdjacentSentinel(row, col, player)) {
-        qWarning() << "executeFootmanConversion: No adjacent Sentinel.";
+        qWarning() << "executeFootFConversion: No adjacent Sentinel.";
         return false;
     }
 
@@ -1948,4 +2083,13 @@ void GameController::handleVanguardBonusMove(int toRow, int toCol)
         "ERROR: Invalid bonus move. Select an adjacent square, a jump square, "
         "or the Vanguard to skip."
         );
+}
+
+void GameController::handleRightClickOnEmptyCell(int row, int col)
+{
+    Q_UNUSED(row);
+    Q_UNUSED(col);
+
+    tacticalManager->clearAllArrows();
+    emit statusMessage("Todas as setas táticas foram removidas.");
 }
