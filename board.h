@@ -29,6 +29,7 @@ public:
     void updateAllCellDisplays();
 
     void setTacticalManager(TacticalManager* manager);
+    void setInternalPiece(int row, int col, PieceWidget* piece);
 
 signals:
     void cellClicked(int row, int col);

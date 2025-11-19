@@ -168,9 +168,7 @@ QString Board::generateCellTooltip(int row, int col) const {
     }
 
     PieceWidget* currentPiece = getPieceAt(row, col);
-    Player viewerPlayer = currentPiece ? currentPiece->getPiece()->getPlayer() : Player::Player1;
-
-    int cellDef = cellData[row][col].getDefense(viewerPlayer);
+    int resourceDef = cellData[row][col].getResources();
     int bastionAuraDef = cellData[row][col].getBastionDefense();
 
     QString pieceInfo = "Nenhuma";
@@ -188,7 +186,7 @@ QString Board::generateCellTooltip(int row, int col) const {
                          .arg(pieceDef);
     }
 
-    int totalDef = cellDef + pieceDef + bastionAuraDef;
+    int totalDef = resourceDef + pieceDef + bastionAuraDef;
 
     QString resourceInfo;
     if (cellData[row][col].hasOwner()) {
@@ -201,9 +199,13 @@ QString Board::generateCellTooltip(int row, int col) const {
     QString defenseInfo = QString("Defesa Total: %1").arg(totalDef);
 
     QString defDetails;
-    if (cellDef > 0) defDetails += QString("Casa:%1").arg(cellDef);
-    if (pieceDef > 0) defDetails += (defDetails.isEmpty() ? "" : " + ") + QString("Peça:%1").arg(pieceDef);
+
+    if (resourceDef > 0) defDetails += QString("Casa:%1").arg(resourceDef);
+
     if (bastionAuraDef > 0) defDetails += (defDetails.isEmpty() ? "" : " + ") + QString("Aura:%1").arg(bastionAuraDef);
+
+    if (pieceDef > 0) defDetails += (defDetails.isEmpty() ? "" : " + ") + QString("Peça:%1").arg(pieceDef);
+
     if (!defDetails.isEmpty()) defenseInfo += " (" + defDetails + ")";
 
     QString blockingReasons;
@@ -269,7 +271,6 @@ QString Board::generateCellTooltip(int row, int col) const {
         .arg(pieceStats.isEmpty() ? "" : pieceStats)
         .arg(blockingReasons.isEmpty() ? "Sem bloqueios" : "Bloqueios:\n" + blockingReasons);
 }
-
 
 void Board::updateCellTooltip(int row, int col) {
     if (row >= 0 && row < 12 && col >= 0 && col < 12) {
@@ -379,4 +380,15 @@ void Board::keyPressEvent(QKeyEvent *event)
     } else {
         QWidget::keyPressEvent(event);
     }
+}
+
+void Board::setInternalPiece(int row, int col, PieceWidget* piece)
+{
+    if (piece) {
+        pieceMap[{row, col}] = piece;
+        piece->installEventFilter(this);
+    } else {
+        pieceMap.remove({row, col});
+    }
+    updateCellTooltip(row, col);
 }

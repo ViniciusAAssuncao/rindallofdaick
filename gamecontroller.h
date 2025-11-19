@@ -132,6 +132,9 @@ private:
     void endGame(Player winner, const QString& victoryType);
     void displayVictoryScreen(Player winner, const QString& victoryType);
 
+    bool isInDaicksFall(Player player);
+    bool isDaicksFall(Player player);
+
     bool parseAndExecuteMove(const QString& notation);
     bool executeMove(PieceWidget* piece, int fromRow, int fromCol, int toRow, int toCol, bool isCapture);
     bool executeRecruitment(PieceType type, int row, int col);
