@@ -336,7 +336,7 @@ void GameController::recruitPiece(PieceType type, Player player, int row, int co
 }
 
 
-void GameController::checkAndEvolve(PieceWidget* pieceWidget, int row, int col) {
+void GameController::checkAndEvolve(PieceWidget* pieceWidget, int row, int col, bool isEndOfTurn) {
     if (!pieceWidget) return;
 
     Piece* piece = pieceWidget->getPiece();
@@ -347,7 +347,7 @@ void GameController::checkAndEvolve(PieceWidget* pieceWidget, int row, int col) 
                               .arg(posToString(row, col)));
     }
 
-    if (piece->getType() == PieceType::Worker) {
+    if (isEndOfTurn && piece->getType() == PieceType::Worker) {
         bool underAttack = false;
         Player opponent = (piece->getPlayer() == Player::Player1) ? Player::Player2 : Player::Player1;
 
@@ -372,7 +372,6 @@ void GameController::checkAndEvolve(PieceWidget* pieceWidget, int row, int col) 
             piece->incrementTurnsUnderAttack();
         } else {
             piece->resetTurnsUnderAttack();
-            piece->resetResourcesAccumulated();
         }
 
         if (piece->getTurnsUnderAttack() >= 8 && piece->getResourcesAccumulated() >= 20) {
@@ -704,7 +703,7 @@ void GameController::performRetroAnimation(PieceWidget* pieceWidget,
             QTimer::singleShot(80, [this, pieceWidget, toRow, toCol, endTurnAfterMove]() {
                 pieceWidget->show();
 
-                checkAndEvolve(pieceWidget, toRow, toCol);
+                checkAndEvolve(pieceWidget, toRow, toCol, false);
 
                 selectedPiece = nullptr;
                 updateBastionProtection();
@@ -772,6 +771,16 @@ void GameController::endTurn() {
     playerStates[activePlayer->getPlayer()].canRecruitLastLost = true;
 
     QString alertStr = checkResourceGeneration();
+
+    for (int row = 0; row < 12; ++row) {
+        for (int col = 0; col < 12; ++col) {
+            PieceWidget* piece = board->getPieceAt(row, col);
+            if (piece && piece->getPiece()->getPlayer() == activePlayer->getPlayer()) {
+                checkAndEvolve(piece, row, col, true);
+            }
+        }
+    }
+
     QString evolutionStr = checkEvolutionConditions();
 
     if (!evolutionStr.isEmpty()) {
@@ -1322,9 +1331,7 @@ int GameController::calculateBastionRepairCost(int pointsToRepair, Player player
 
     int inflation = playerStates.value(player).bastionRepairs;
 
-    int costPerPoint = baseCostPerPoint + inflation;
-
-    return costPerPoint * pointsToRepair;
+    return (baseCostPerPoint * pointsToRepair) + inflation;
 }
 
 void GameController::checkVictoryConditions() {

@@ -76,7 +76,7 @@ private:
     int calculateRecruitmentCost(PieceType type, Player player);
     bool canRecruitPiece(PieceType type, Player player, int row, int col, int availableResources);
     void recruitPiece(PieceType type, Player player, int row, int col);
-    void checkAndEvolve(PieceWidget* pieceWidget, int row, int col);
+    void checkAndEvolve(PieceWidget* pieceWidget, int row, int col, bool isEndOfTurn = false);
     void evolvePiece(int row, int col, PieceType newType);
     QString checkEvolutionConditions();
 
