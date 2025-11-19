@@ -795,7 +795,7 @@ void GameController::endTurn() {
 
     if (isDaicksFall(activePlayer->getPlayer())) {
         Player opponent = (activePlayer->getPlayer() == Player::Player1) ? Player::Player2 : Player::Player1;
-        endGame(opponent, "Daick's Fall - Não é mais possível salvar o Daick.");
+        endGame(opponent, "Daick's Fall");
     }
 
     QString playerStr = (activePlayer->getPlayer() == Player::Player1) ? "Player 1" : "Player 2";
